@@ -106,9 +106,9 @@ class TensorType(ExplicitEnum):
 
 class GeneformerPreCollator(SpecialTokensMixin):
     def __init__(self, *args, **kwargs) -> None:
-        
-        super().__init__(mask_token = "<mask>", pad_token = "<pad>")
-        
+
+        super().__init__(mask_token="<mask>", pad_token="<pad>")
+
         self.token_dictionary = kwargs.get("token_dictionary")
         # self.mask_token = "<mask>"
         # self.mask_token_id = self.token_dictionary.get("<mask>")
@@ -120,8 +120,8 @@ class GeneformerPreCollator(SpecialTokensMixin):
         #     self.token_dictionary.get("<pad>"),
         # ]
         self.model_input_names = ["input_ids"]
-    
-    def convert_ids_to_tokens(self,value):
+
+    def convert_ids_to_tokens(self, value):
         return self.token_dictionary.get(value)
 
     def _get_padding_truncation_strategies(
@@ -137,7 +137,8 @@ class GeneformerPreCollator(SpecialTokensMixin):
         Find the correct padding/truncation strategy with backward compatibility for old arguments (truncation_strategy
         and pad_to_max_length) and behaviors.
         """
-        old_truncation_strategy = kwargs.pop("truncation_strategy", "do_not_truncate")
+        old_truncation_strategy = kwargs.pop(
+            "truncation_strategy", "do_not_truncate")
         old_pad_to_max_length = kwargs.pop("pad_to_max_length", False)
 
         # Backward compatibility for previous behavior, maybe we should deprecate it:
@@ -391,7 +392,6 @@ class GeneformerPreCollator(SpecialTokensMixin):
 
             for key, value in encoded_inputs.items():
                 encoded_inputs[key] = to_py_obj(value)
-                
 
         # Convert padding_strategy in PaddingStrategy
         padding_strategy, _, max_length, _ = self._get_padding_truncation_strategies(
@@ -433,7 +433,6 @@ class GeneformerPreCollator(SpecialTokensMixin):
                 if key not in batch_outputs:
                     batch_outputs[key] = []
                 batch_outputs[key].append(value)
-
         return BatchEncoding(batch_outputs, tensor_type=return_tensors)
 
     def _pad(
@@ -479,7 +478,8 @@ class GeneformerPreCollator(SpecialTokensMixin):
             and pad_to_multiple_of is not None
             and (max_length % pad_to_multiple_of != 0)
         ):
-            max_length = ((max_length // pad_to_multiple_of) + 1) * pad_to_multiple_of
+            max_length = ((max_length // pad_to_multiple_of) +
+                          1) * pad_to_multiple_of
 
         needs_to_be_padded = (
             padding_strategy != PaddingStrategy.DO_NOT_PAD
@@ -500,7 +500,8 @@ class GeneformerPreCollator(SpecialTokensMixin):
                     )
                 if "special_tokens_mask" in encoded_inputs:
                     encoded_inputs["special_tokens_mask"] = (
-                        encoded_inputs["special_tokens_mask"] + [1] * difference
+                        encoded_inputs["special_tokens_mask"] +
+                        [1] * difference
                     )
                 encoded_inputs[self.model_input_names[0]] = (
                     required_input + [self.pad_token_id] * difference
@@ -522,7 +523,8 @@ class GeneformerPreCollator(SpecialTokensMixin):
                     self.pad_token_id
                 ] * difference + required_input
             else:
-                raise ValueError("Invalid padding strategy:" + str(self.padding_side))
+                raise ValueError("Invalid padding strategy:" +
+                                 str(self.padding_side))
         elif return_attention_mask and "attention_mask" not in encoded_inputs:
             encoded_inputs["attention_mask"] = [1] * len(required_input)
 
@@ -596,11 +598,12 @@ class GeneformerPreCollator(SpecialTokensMixin):
 
 class GeneformerPretrainer(Trainer):
     def __init__(self, *args, **kwargs):
-        data_collator = kwargs.get("data_collator",None)
+        data_collator = kwargs.get("data_collator", None)
         token_dictionary = kwargs.pop("token_dictionary")
 
         if data_collator is None:
-            precollator = GeneformerPreCollator(token_dictionary=token_dictionary)
+            precollator = GeneformerPreCollator(
+                token_dictionary=token_dictionary)
 
             # # Data Collator Functions
             data_collator = DataCollatorForLanguageModeling(
@@ -695,6 +698,7 @@ class CustomDistributedLengthGroupedSampler(DistributedLengthGroupedSampler):
     length while keeping a bit of randomness.
     """
     # Copied and adapted from PyTorch DistributedSampler.
+
     def __init__(
         self,
         dataset: Dataset,
@@ -708,11 +712,13 @@ class CustomDistributedLengthGroupedSampler(DistributedLengthGroupedSampler):
     ):
         if num_replicas is None:
             if not dist.is_available():
-                raise RuntimeError("Requires distributed package to be available")
+                raise RuntimeError(
+                    "Requires distributed package to be available")
             num_replicas = dist.get_world_size()
         if rank is None:
             if not dist.is_available():
-                raise RuntimeError("Requires distributed package to be available")
+                raise RuntimeError(
+                    "Requires distributed package to be available")
             rank = dist.get_rank()
         self.dataset = dataset
         self.batch_size = batch_size
@@ -750,15 +756,17 @@ class CustomDistributedLengthGroupedSampler(DistributedLengthGroupedSampler):
                     "Can only automatically infer lengths for datasets whose items are dictionaries with an "
                     f"'{self.model_input_name}' key."
                 )
-            lengths = [len(feature[self.model_input_name]) for feature in dataset]
+            lengths = [len(feature[self.model_input_name])
+                       for feature in dataset]
         self.lengths = lengths
 
     def __iter__(self) -> Iterator:
         # Deterministically shuffle based on epoch and seed
         g = torch.Generator()
         g.manual_seed(self.seed + self.epoch)
-        
-        indices = get_length_grouped_indices(self.lengths, self.batch_size, generator=g)
+
+        indices = get_length_grouped_indices(
+            self.lengths, self.batch_size, generator=g)
 
         if not self.drop_last:
             # add extra samples to make it evenly divisible
@@ -769,7 +777,7 @@ class CustomDistributedLengthGroupedSampler(DistributedLengthGroupedSampler):
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank : self.total_size : self.num_replicas]
+        indices = indices[self.rank: self.total_size: self.num_replicas]
         assert len(indices) == self.num_samples
 
         return iter(indices)
@@ -801,7 +809,7 @@ def get_length_grouped_indices(
     indices = torch.randperm(len(lengths), generator=generator)
     megabatch_size = mega_batch_mult * batch_size
     megabatches = [
-        indices[i : i + megabatch_size].tolist()
+        indices[i: i + megabatch_size].tolist()
         for i in range(0, len(lengths), megabatch_size)
     ]
     megabatches = [

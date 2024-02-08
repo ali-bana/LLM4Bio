@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 tekenized.dataset/
+saves/
+lightning_logs
 # C extensions
 *.so
 
