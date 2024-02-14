@@ -6,17 +6,34 @@ from pytorch_lightning import Trainer
 import pickle
 from LLM4Bio.data import LLM4Bio_data
 from LLM4Bio.models import TextGeneContrastive
-dataset = LLM4Bio_data()
+
+save_dir = './saves'
+config = {
+    'emb_dim': 1024,
+    'freeze_text_model': True,
+    'freeze_gene_model': True,
+    'lr': 1e-3,
+    'batch_size': 16,
+    'n_top_genes': 500,
+    'dino_nlayers': 3,
+    'data_dir': './data',
+    'save_dir': save_dir,
+    'text_model': 'biolinkbert',
+    'gene_model': 'geneformer',
+    'gene_dataset': 'PBMC',
+    'gene_summary': 'NCBI',
+    'cell_ontology': 'mixed',
+}
+
+
+dataset = LLM4Bio_data(config)
 
 dataset.prepare_data()
 dataset.setup('')
 
 
-model = TextGeneContrastive(summary_dict=dataset.get_tokenized_gene_sunmmaries(False),
-                            freeze_bert=False,
-                            freeze_geneformer=False,
-                            lr=1e-3)
-model.build_summary_table(dataset.get_tokenized_gene_sunmmaries(True))
+model = TextGeneContrastive(config)
+model.build_summary_table(dataset._get_tokenized_gene_sunmmaries(True))
 # save_dir = os.path.join('saves', 'TextGeneContrastive',
 # date.today().strftime("%Y-%m-%d"))
 # checkpoint_callback = ModelCheckpoint(
@@ -28,6 +45,8 @@ model.build_summary_table(dataset.get_tokenized_gene_sunmmaries(True))
 # tblogger = TensorBoardLogger(save_dir)
 # trainer = Trainer(max_epochs=20, callbacks=[
 #   checkpoint_callback], logger=tblogger)
-trainer = Trainer(max_epochs=20)
+
+logger = TensorBoardLogger("temp", name="my_model")
+trainer = Trainer(max_epochs=100, logger=logger)
 trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
             val_dataloaders=dataset.val_dataloader())

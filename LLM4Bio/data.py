@@ -9,33 +9,32 @@ from datasets import load_from_disk
 from .Geneformer.pretrainer import GeneformerPreCollator
 from transformers import DataCollatorForLanguageModeling
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
+import torch
+from tqdm import tqdm
 
 
 class LLM4Bio_data(LightningDataModule):
-    def __init__(self,
-                 data_dir='./data',
-                 gene_dataset='PBMC',
-                 gene_summary='NCBI',
-                 cell_ontology='mixed',  # might neet to remove this one
-                 batch_size=8,
-                 token_dictionary_path='./LLM4Bio/Geneformer/token_dictionary.pkl',
-                 ) -> None:
+    def __init__(self, config) -> None:
         super().__init__()
-        if not os.path.exists(data_dir):
-            os.makedirs(data_dir)
-        self.data_dir = data_dir
-        self.gene_summary = gene_summary
-        self.gene_dataset = gene_dataset
-        self.cell_ontology = cell_ontology
-        self.batch_size = batch_size
-        self.text_tokenizer = AutoTokenizer.from_pretrained(
-            'michiyasunaga/BioLinkBERT-large')
+        if not os.path.exists(config['data_dir']):
+            os.makedirs(config['data_dir'])
+        self.data_dir = config['data_dir']
+        self.gene_summary = config['gene_summary']
+        self.gene_dataset = config['gene_dataset']
+        self.cell_ontology = config['cell_ontology']
+        self.batch_size = config['batch_size']
+        self.freeze_text_model = config['freeze_text_model']
+        if config['text_model'].lower() == 'biolinkbert':
+            self.text_tokenizer = AutoTokenizer.from_pretrained(
+                'michiyasunaga/BioLinkBERT-large')
+        token_dictionary_path = './LLM4Bio/Geneformer/token_dictionary.pkl'
         with open(token_dictionary_path, 'rb') as f:
             self.token_dictionary = pickle.load(f)
+        self.n_top_genes = config['n_top_genes']
+        self.config = config
 
-    def prepare_data(self,
-                     n_top_genes=500) -> None:
+    def prepare_data(self) -> None:
         if self.gene_dataset == 'PBMC':
             adata_url = 'https://drive.google.com/uc?export=download&id=100cUioEzUbO1OTRpNsHwt_Z8XONnVogz'
             self.data_dir = os.path.join(self.data_dir, 'PBMC')
@@ -73,7 +72,7 @@ class LLM4Bio_data(LightningDataModule):
         loom_path = os.path.join(self.data_dir, 'loom')
         if not os.path.exists(loom_path):
             os.makedirs(loom_path)
-        sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes)
+        sc.pp.highly_variable_genes(adata, n_top_genes=self.n_top_genes)
         adata = adata[:, adata.var.highly_variable]
         import pandas as pd
         present_genes = []
@@ -100,6 +99,9 @@ class LLM4Bio_data(LightningDataModule):
         self.available_genes = adata.var_names.values
         self.available_genes = [self.gene2ensembl[g]
                                 for g in self.available_genes]
+        # if self.config['freeze_text_model']:
+        #     self.build_summary_table(
+        #         self._get_tokenized_gene_sunmmaries(tokenized=True))
 
     def setup(self, stage: str) -> None:
         dataset = load_from_disk(self.tokenized_path).shuffle(
@@ -131,7 +133,7 @@ class LLM4Bio_data(LightningDataModule):
                           batch_size=self.batch_size,
                           collate_fn=self.collator)
 
-    def get_tokenized_gene_sunmmaries(self, tokenized=True):
+    def _get_tokenized_gene_sunmmaries(self, tokenized=True):
         summariers = {}
         for gene in self.available_genes:
             if tokenized:
@@ -141,3 +143,12 @@ class LLM4Bio_data(LightningDataModule):
                 summariers[self.token_dictionary[gene]
                            ] = self.gene_summary[gene]
         return summariers
+
+    def build_summary_table(self, tokenized_gene_summary: dict):
+        self.summary_table = {}
+        model = AutoModel.from_pretrained('michiyasunaga/BioLinkBERT-base')
+        with torch.no_grad():
+            for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
+                self.summary_table[gene] = model(
+                    **tokenized_gene_summary[gene]).last_hidden_state.mean(dim=1)[0]
+            self.summary_table[0] = torch.zeros(768)

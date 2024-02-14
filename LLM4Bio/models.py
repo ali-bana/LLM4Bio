@@ -6,25 +6,22 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM
 from .utils import trunc_normal_
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 
 
 class TextEncoder(nn.Module):
-    def __init__(self,
-                 emb_dim=1024,
-                 llm_model='bioLinkBert',
-                 freeze_llm=True,
-                 *args,
-                 **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, config) -> None:
+        super().__init__()
 
-        if llm_model.lower() == 'biolinkbert':
+        if config['text_model'].lower() == 'biolinkbert':
             self.model = AutoModel.from_pretrained(
                 'michiyasunaga/BioLinkBERT-base')
             llm_emb_dim = 768
-        if freeze_llm:
+        if config['freeze_text_model']:
             for param in self.model.parameters():
                 param.requires_grad = False
-        self.projector = DINOHead(llm_emb_dim, emb_dim)
+        self.projector = DINOHead(
+            llm_emb_dim, config['emb_dim'], nlayers=config['dino_nlayers'])
 
     def forward(self, inputs):
         return self.projection_forward(self.llm_forward(inputs))
@@ -97,17 +94,16 @@ class DINOHead(nn.Module):
 
 
 class GeneEncoder(nn.Module):
-    def __init__(self,
-                 emb_dim=1024,
-                 freeze_geneformer=True) -> None:
+    def __init__(self, config) -> None:
         super().__init__()
         self.model = AutoModelForMaskedLM.from_pretrained(
             "ctheodoris/Geneformer")
-        if freeze_geneformer:
+        if config['freeze_gene_model']:
             for param in self.model.parameters():
                 param.requires_grad = False
         geneformer_dim = 256
-        self.projector = DINOHead(geneformer_dim, emb_dim)
+        self.projector = DINOHead(
+            geneformer_dim, config['emb_dim'], nlayers=config['dino_nlayers'])
 
     def gene_encoder_forward(self, inputs):
         input_ids = inputs['input_ids']
@@ -124,26 +120,17 @@ class GeneEncoder(nn.Module):
 
 
 class TextGeneContrastive(LightningModule):
-    def __init__(self,
-                 summary_dict: dict,
-                 embed_dim=1024,
-                 freeze_bert=True,
-                 freeze_geneformer=True,
-                 lr=1e-3) -> None:
+    def __init__(self, config) -> None:
         super().__init__()
-        self.embed_dim = embed_dim
-        self.text_encoder = TextEncoder(
-            emb_dim=self.embed_dim, freeze_llm=freeze_bert)
-        self.gene_encoder = GeneEncoder(
-            emb_dim=self.embed_dim, freeze_geneformer=freeze_geneformer)
+        self.embed_dim = config['emb_dim']
+        self.text_encoder = TextEncoder(config)
+        self.gene_encoder = GeneEncoder(config)
         self.summary_table = dict()
         self.temperature = 1
-        self.lr = lr
+        self.lr = config['lr']
         self.text_tokenizer = AutoTokenizer.from_pretrained(
             'michiyasunaga/BioLinkBERT-large')  # add this to dataloader
-        self.summary_dict = summary_dict
-        self.summary_dict[0] = ' '
-        self.freeze_bert = freeze_bert
+        self.freeze_bert = config['freeze_text_model']
 
     def build_summary_table(self, tokenized_gene_summary: dict):
         if not self.freeze_bert:
@@ -151,8 +138,7 @@ class TextGeneContrastive(LightningModule):
         with torch.no_grad():
             for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
                 self.summary_table[gene] = self.text_encoder.llm_forward(
-                    tokenized_gene_summary[gene]).mean(dim=1)[0]
-                # self.summary_table[gene] = torch.rand(768)
+                    tokenized_gene_summary[gene])[0][0]
             self.summary_table[0] = torch.zeros(768)
 
     def forward(self, inputs) -> Any:
@@ -181,26 +167,36 @@ class TextGeneContrastive(LightningModule):
     def loss(self, inputs, outputs):
         gene_loss = 0
         text_loss = 0
+        loss = 0
         length = inputs['length']
         for i in range(inputs['input_ids'].shape[0]):
             text_embedding = outputs['text_enc'][i, :length[i]]
             gene_embedding = outputs['gene_enc'][i, :length[i]]
             logits = (text_embedding @ gene_embedding.T) / self.temperature
-            gene_similarity = gene_embedding @ gene_embedding.T
-            texts_similarity = text_embedding @ text_embedding.T
-            targets = torch.softmax(
-                (gene_similarity + texts_similarity) / 2 * self.temperature, dim=-1
-            )
-            gene_loss += (-targets.T *
-                          torch.log_softmax(logits.T, dim=-1)).sum(1).mean()
-            text_loss += (-targets * torch.log_softmax(logits,
-                          dim=-1)).sum(1).mean()
-        return {'gene_loss': gene_loss, 'text_loss': text_loss, 'loss': gene_loss + text_loss}
+            targets = torch.arange(logits.shape[0]).to(logits.device)
+            tl = F.cross_entropy(logits, targets)
+            gl = F.cross_entropy(logits.T, targets)
+            loss += ((tl + gl) / (2.0))
+            text_loss += tl
+            gene_loss += gl
+        return {'gene_loss': gene_loss, 'text_loss': text_loss, 'loss': loss}
+
+    def _clip_with_logits(self, logits):
+        n = logits.shape[1]      # number of samples
+        labels = torch.arange(n)  # Create labels tensor
+        # Calculate cross entropy losses along axis 0 and 1
+        loss_i = F.cross_entropy(logits.transpose(
+            0, 1), labels, reduction="mean")
+        loss_t = F.cross_entropy(logits, labels, reduction="mean")
+        # Calculate the final loss
+        loss = (loss_i + loss_t) / 2
+        return loss
 
     def training_step(self, batch, batch_idx):
         outputs = self.forward(batch)
         loss_dict = self.loss(batch, outputs)
         logs = {
+            'loss': loss_dict['loss'],
             'train_loss': loss_dict['loss'],
             'train_gene_loss': loss_dict['gene_loss'],
             'train_text_loss': loss_dict['text_loss']
@@ -220,5 +216,5 @@ class TextGeneContrastive(LightningModule):
         return loss_dict
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
