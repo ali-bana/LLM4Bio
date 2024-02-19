@@ -1,3 +1,6 @@
+from scipy.spatial import distance
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 import math
 import torch
 import warnings
@@ -42,3 +45,14 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
+
+
+def get_cosines(embeddings):
+    print(embeddings.shape)
+    n = embeddings.shape[0]
+    similarities = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            similarities[i, j] = 1 - distance.cosine(
+                embeddings[i], embeddings[j])
+    return similarities

@@ -24,7 +24,8 @@ class Embedder:
         result = []
         counter = 0
         for batch in tqdm(dataloader):
-            out = model.forward(batch)
+            with torch.no_grad():
+                out = model.forward(batch)
             length = batch['length']
             gene_encs = out['gene_enc']
             text_encs = out['text_enc']
@@ -63,7 +64,7 @@ class Embedder:
             for cell in embedded:
                 if cell_types is None or cell['cell_type'] in cell_types:
                     result_embedding.append(
-                        cell['cell_emb_gene']if embedding == 'gene' else cell['cell_emb_text'])
+                        cell['cell_emb_gene'] if embedding == 'gene' else cell['cell_emb_text'])
                     result_cell_type.append(cell['cell_type'])
             result = pd.DataFrame(result_embedding)
             result['cell_type'] = result_cell_type
@@ -85,4 +86,14 @@ class Embedder:
         result['cell_type'] = result_cell_type
         result['gene'] = result_gene
         return result
+
+    def get_all_gene_text_embedding(self, model):
+        result = []
+        for k, v in model.summary_table.items():
+            if k == 0:
+                continue
+            result.append(
+                model.text_encoder.projection_forward(v).detach().numpy())
+        return np.stack(result)
+
 # %%
