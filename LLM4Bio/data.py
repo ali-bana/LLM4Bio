@@ -46,7 +46,8 @@ class LLM4Bio_data(LightningDataModule):
             gene_summary_path = os.path.join(
                 self.data_dir, 'NCBI_gene_summary.txt')
         if self.cell_ontology == 'mixed':
-            ontology_url = 'https://drive.google.com/uc?export=download&id=10PVKyXJXEj9_apEAQFcWniBiubk1rOsj'
+            # https://drive.google.com/file/d/1K68vSGFxZ_lf5j9CV75l-sj_TW8R5352/view?usp=sharing
+            ontology_url = 'https://drive.google.com/uc?export=download&id=1K68vSGFxZ_lf5j9CV75l-sj_TW8R5352'
             cell_ontology_path = os.path.join(
                 self.data_dir, 'cell_type_ontology.txt')
         hgnc2ensmbl_url = 'https://drive.google.com/uc?export=download&id=1s9K_tV2f_n6zONtUt6_lTQY_9FYhvZfm'
@@ -84,10 +85,10 @@ class LLM4Bio_data(LightningDataModule):
         adata.obsm['n_counts'] = adata.X.sum(axis=1)
         adata.varm['ensembl_id'] = pd.Series(
             self.gene2ensembl, index=adata.var_names).values
-        self.cell_index = {item: i for i, item in enumerate(
+        self.cell2index = {item: i for i, item in enumerate(
             adata.obs['cell_type'].unique())}
-        adata.obs['cell_type'].replace(self.cell_index, inplace=True)
-        self.cell_index.update({v: k for k, v in self.cell_index.items()})
+        adata.obs['cell_type'].replace(self.cell2index, inplace=True)
+        self.index2cell = {v: k for k, v in self.cell2index.items()}
         adata.write_loom(os.path.join(loom_path, 'pbmc.loom'), True)
         tk = TranscriptomeTokenizer({"cell_type": "cell_type"}, nproc=16)
         self.tokenized_path = os.path.join(self.data_dir, 'tokenized')
@@ -135,13 +136,38 @@ class LLM4Bio_data(LightningDataModule):
 
     def _get_tokenized_gene_sunmmaries(self, tokenized=True):
         summariers = {}
-        for gene in self.available_genes:
-            if tokenized:
-                summariers[self.token_dictionary[gene]] = self.text_tokenizer(
-                    self.gene_summary[gene], return_tensors="pt")
-            else:
-                summariers[self.token_dictionary[gene]
-                           ] = self.gene_summary[gene]
+        if not self.config['use_cell_type']:
+            for gene in self.available_genes:
+                if tokenized:
+                    summariers[self.token_dictionary[gene]] = self.text_tokenizer(
+                        self.gene_summary[gene], return_tensors="pt")
+                else:
+                    summariers[self.token_dictionary[gene]
+                               ] = self.gene_summary[gene]
+        else:
+            # for gene in self.available_genes:
+            #     desc = self.gene_summary[gene] + \
+            #         f' Expressed in {cell_type}. ' + \
+            #         self.ontology[cell_type]
+            #     if tokenized:
+            #         summariers[idx][self.token_dictionary[gene]] = self.text_tokenizer(
+            #             desc, return_tensors="pt")
+            #     else:
+            #         summariers[idx][self.token_dictionary[gene]
+            #                         ] = desc
+            cells = [idx for idx in self.cell2index.values()]
+            for gene in self.available_genes:
+                sentences = []
+                for cell in cells:
+                    sentences.append(
+                        self.gene_summary[gene] + f' Expressed in {self.index2cell[cell]}. ' + self.ontology[self.index2cell[cell]])
+                    if tokenized:
+                        summariers[self.token_dictionary[gene]] = self.text_tokenizer(
+                            sentences, return_tensors="pt", padding=True, max_length=512, truncation=True)
+                    else:
+                        summariers[self.token_dictionary[gene]
+                                   ] = sentences
+            return summariers, cells
         return summariers
 
     def build_summary_table(self, tokenized_gene_summary: dict):

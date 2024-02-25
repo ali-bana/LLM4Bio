@@ -1,9 +1,8 @@
-# %%
-import datasets
-from LLM4Bio.Geneformer.pretrainer import GeneformerPreCollator
-import pickle
-from transformers import DataCollator, DataCollatorForLanguageModeling
-from datetime import date
+import json
 
+d = {}
+d[2] = {2: 3, 3: 4}
+d[3] = {5: 3, 4: 4}
 
-print(date.today().strftime("%Y_%m_%d"))
+with open('temp.json', 'w') as f:
+    json.dump(d, f)

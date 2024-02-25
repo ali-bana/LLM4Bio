@@ -122,6 +122,7 @@ class GeneEncoder(nn.Module):
 class TextGeneContrastive(LightningModule):
     def __init__(self, config) -> None:
         super().__init__()
+        self.save_hyperparameters()
         self.embed_dim = config['emb_dim']
         self.text_encoder = TextEncoder(config)
         self.gene_encoder = GeneEncoder(config)
@@ -131,27 +132,51 @@ class TextGeneContrastive(LightningModule):
         self.text_tokenizer = AutoTokenizer.from_pretrained(
             'michiyasunaga/BioLinkBERT-large')  # add this to dataloader
         self.freeze_bert = config['freeze_text_model']
+        self.use_cell_type = config['use_cell_type']
 
     def build_summary_table(self, tokenized_gene_summary: dict):
         if not self.freeze_bert:
             return
-        with torch.no_grad():
-            for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
-                self.summary_table[gene] = self.text_encoder.llm_forward(
-                    tokenized_gene_summary[gene])[0][0]
-            self.summary_table[0] = torch.zeros(768)
+        if not self.use_cell_type:
+            with torch.no_grad():
+                for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
+                    self.summary_table[gene] = self.text_encoder.llm_forward(
+                        tokenized_gene_summary[gene])[0][0]
+                self.summary_table[0] = torch.zeros(768)
+        else:
+            with torch.no_grad():
+                summaries, cells = tokenized_gene_summary
+                for cell in cells:
+                    self.summary_table[cell] = dict()
+                    self.summary_table[cell][0] = torch.zeros(
+                        768).to(self.text_encoder.model.device)
+                for gene in tqdm(summaries.keys(), desc="Building summary table"):
+                    out = self.text_encoder.llm_forward(
+                        summaries[gene].to(self.text_encoder.model.device))
+                    for i, cell in enumerate(cells):
+                        self.summary_table[cell][gene] = out[i][0]
 
     def forward(self, inputs) -> Any:
         gene_enc = self.gene_encoder.forward(inputs)
         input_ids = inputs['input_ids']
         text_enc = []
         if self.freeze_bert:
-            for i in range(input_ids.shape[0]):
-                emb = []
-                for j in range(input_ids.shape[1]):
-                    emb.append(self.summary_table[input_ids[i, j].item()])
-                text_enc.append(torch.stack(emb))
+            if not self.use_cell_type:
+                for i in range(input_ids.shape[0]):
+                    emb = []
+                    for j in range(input_ids.shape[1]):
+                        emb.append(self.summary_table[input_ids[i, j].item()])
+                    text_enc.append(torch.stack(emb))
+            else:
+                for i in range(input_ids.shape[0]):
+                    emb = []
+                    for j in range(input_ids.shape[1]):
+                        emb.append(
+                            self.summary_table[inputs['cell_type'][i].item()][input_ids[i, j].item()])
+                    text_enc.append(torch.stack(emb))
+
         else:
+            # must be changed
             for i in range(input_ids.shape[0]):
                 ins = [self.summary_dict[int(input_ids[i][j])]
                        for j in range(input_ids.shape[1])]
@@ -162,7 +187,7 @@ class TextGeneContrastive(LightningModule):
         text_enc = self.text_encoder.projection_forward(
             text_enc)
 
-        return {'gene_enc': gene_enc, 'text_enc': text_enc}
+        return {'gene_enc': gene_enc, 'text_enc': text_enc, 'geneformer_encoded': self.gene_encoder.gene_encoder_forward(inputs)}
 
     def loss(self, inputs, outputs):
         gene_loss = 0

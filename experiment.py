@@ -40,60 +40,61 @@ model.load_state_dict(checkpoint['state_dict'])
 model.build_summary_table(dataset._get_tokenized_gene_sunmmaries(True))
 # %%
 embedder = Embedder(dataset.token_dictionary,
-                    dataset.cell_index,
+                    dataset.cell2index,
                     dataset.gene2ensembl)
-# loader = dataset.test_dataloader()
-# del dataset
-# embedded = embedder.get_embed(model, loader, 7500)
-# del model
-# # %%
-# filtered = embedder.filter(embedded, None, None, 'cell')
+loader = dataset.test_dataloader()
+del dataset
+embedded = embedder.get_embed(model, loader, 7500, include=[
+                              'geneformer_emb', 'cell_emb_geneformer', 'gene_emb'])
+del model
+for embedding in ['gene', 'geneformer']:
+    filtered = embedder.filter(
+        embedded, None, None, mode='cell', embedding=embedding)
 
-# # %%
-# adata = sc.AnnData(X=filtered.drop(columns=['cell_type']).values)
-# adata.obs['cell_type'] = filtered['cell_type'].values
-# sc.pp.neighbors(adata, use_rep='X')
-# sc.tl.umap(adata)
-# sc.pl.umap(adata, color='cell_type', save='adata.png')
-# # %%
-# filtered['cell_type']
-# # %%
+    adata = sc.AnnData(X=filtered.drop(columns=['cell_type']).values)
+    adata.obs['cell_type'] = filtered['cell_type'].values
+    sc.pp.neighbors(adata, use_rep='X')
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color='cell_type',
+               save=f'cell_emb_{embedding}.png', title=f'Cell embeddings {embedding}')
 
-# marker_genes = ['IL7R', 'CD79A', 'MS4A1', 'CD8A', 'CD8B', 'LYZ', 'CD14',
-#                         'LGALS3', 'S100A8', 'GNLY', 'NKG7', 'KLRB1',
-#                         'FCGR3A', 'MS4A7', 'FCER1A', 'CST3', 'PPBP']
+    marker_genes = ['IL7R', 'CD79A', 'MS4A1', 'CD8A', 'CD8B', 'LYZ', 'CD14',
+                            'LGALS3', 'S100A8', 'GNLY', 'NKG7', 'KLRB1',
+                            'FCGR3A', 'MS4A7', 'FCER1A', 'CST3', 'PPBP']
 
-# for gene in marker_genes:
-#     filtered = embedder.filter(embedded, None, [gene], 'gene')
-#     adata = sc.AnnData(X=filtered.drop(columns=['cell_type', 'gene']).values)
-#     if adata.shape[0] == 0:
-#         continue
-#     adata.obs['cell_type'] = filtered['cell_type'].values
-#     sc.pp.neighbors(adata, use_rep='X')
-#     sc.tl.umap(adata)
-#     sc.pl.umap(adata, color='cell_type',
-#                title=f'{gene} embeddings', save=f'{gene}.png')
+    for gene in marker_genes:
+        filtered = embedder.filter(embedded, cell_types=None, genes=[
+            gene], mode='gene', embedding=embedding)
+        adata = sc.AnnData(X=filtered.drop(
+            columns=['cell_type', 'gene']).values)
+        if adata.shape[0] == 0:
+            continue
+        adata.obs['cell_type'] = filtered['cell_type'].values
+        sc.pp.neighbors(adata, use_rep='X')
+        sc.tl.umap(adata)
+        sc.pl.umap(adata, color='cell_type',
+                   title=f'{gene} {embedding} embeddings', save=f'{gene}_{embedding}.png')
 
 # %%
 
-text_emb_head = embedder.get_all_gene_text_embedding(model)
-text_emb_llm = []
-for k, v in model.summary_table.items():
-    if k == 0:
-        continue
-    text_emb_llm.append(v.detach().numpy())
-text_emb_llm = np.stack(text_emb_llm)
+# text_emb_head = embedder.get_all_gene_text_embedding(model)
+# text_emb_llm = []
+# for k, v in model.summary_table.items():
+#     if k == 0:
+#         continue
+#     text_emb_llm.append(v.detach().numpy())
+# text_emb_llm = np.stack(text_emb_llm)
 
-cosine_head = get_cosines(text_emb_head)
-cosine_llm = get_cosines(text_emb_llm)
+# cosine_head = get_cosines(text_emb_head)
+# cosine_llm = get_cosines(text_emb_llm)
 
-print(
-    f'Head: mean {cosine_head.mean()}, max {cosine_head.max()}, min {cosine_head.min()}')
-print(
-    f'LLM: mean {cosine_llm.mean()}, max {cosine_llm.max()}, min {cosine_llm.min()}')
+# print(
+#     f'Head: mean {cosine_head.mean()}, max {cosine_head.max()}, min {cosine_head.min()}')
+# print(
+#     f'LLM: mean {cosine_llm.mean()}, max {cosine_llm.max()}, min {cosine_llm.min()}')
 
-sns_plot = sns.heatmap(cosine_head)
-sns_plot.figure.savefig('./figures/head.png')
+# sns_plot = sns.heatmap(cosine_head)
+# sns_plot.figure.savefig('./figures/head.png')
 
-sns_plot = sns.heatmap(cosine_llm)
-sns_plot.figure.savefig('./figures/llm.png')
+# sns_plot = sns.heatmap(cosine_llm)
+# sns_plot.figure.savefig('./figures/llm.png')

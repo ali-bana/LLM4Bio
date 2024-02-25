@@ -20,7 +20,7 @@ class Embedder:
         self.hgnc2ensmbl = hgnc2ensmbl
         self.ensmbl2hgnc = {v: k for k, v in hgnc2ensmbl.items()}
 
-    def get_embed(self, model, dataloader, n_cells=-1):
+    def get_embed(self, model, dataloader, n_cells=-1, include=['gene_emb', 'text_emb', 'geneformer_emb', 'cell_emb_geneformer']):
         result = []
         counter = 0
         for batch in tqdm(dataloader):
@@ -34,17 +34,25 @@ class Embedder:
                 if n_cells > -1 and counter > n_cells:
                     return result
                 cell_dict = {}
-                cell_dict['gene_emb'] = gene_encs[i,
-                                                  :length[i], :].detach().numpy()
-                cell_dict['text_emb'] = text_encs[i,
-                                                  :length[i], :].detach().numpy()
+                if 'gene_emb' in include:
+                    cell_dict['gene_emb'] = gene_encs[i,
+                                                      :length[i], :].detach().cpu().numpy()
+                if 'text_emb' in include:
+                    cell_dict['text_emb'] = text_encs[i,
+                                                      :length[i], :].detach().cpu().numpy()
+                if 'geneformer_emb' in include:
+                    cell_dict['geneformer_emb'] = out['geneformer_encoded'][i,
+                                                                            :length[i], :].detach().cpu().numpy()
+                if 'cell_emb_geneformer' in include:
+                    cell_dict['cell_emb_geneformer'] = out['geneformer_encoded'][i,
+                                                                                 :length[i], :].mean(dim=0).detach().cpu().numpy()
                 cell_dict['cell_emb_gene'] = gene_encs[i,
-                                                       :length[i], :].mean(dim=0).detach().numpy()
+                                                       :length[i], :].mean(dim=0).detach().cpu().numpy()
                 cell_dict['cell_emb_text'] = text_encs[i,
-                                                       :length[i], :].mean(dim=0).detach().numpy()
+                                                       :length[i], :].mean(dim=0).detach().cpu().numpy()
                 cell_dict['cell_type'] = self.id2cell_type[batch['cell_type'][i].item()]
                 cell_dict['input_ids'] = batch['input_ids'][i,
-                                                            :length[i]].detach().numpy()
+                                                            :length[i]].detach().cpu().numpy()
                 cell_dict['input_ids'] = np.array(
                     [self.token2ensmble[x] for x in cell_dict['input_ids']])
                 result.append(cell_dict)
@@ -54,7 +62,7 @@ class Embedder:
     def filter(self, embedded, cell_types=None, genes=None, mode='gene', embedding='gene'):
         if not mode in ['cell', 'gene']:
             raise ValueError('mode must be "cell" or "gene"')
-        if not embedding in ['text', 'gene']:
+        if not embedding in ['text', 'gene', 'geneformer']:
             raise ValueError('embedding must be "text" or "gene"')
         result_embedding = []
         result_gene = []
@@ -63,8 +71,13 @@ class Embedder:
         if mode == 'cell':
             for cell in embedded:
                 if cell_types is None or cell['cell_type'] in cell_types:
-                    result_embedding.append(
-                        cell['cell_emb_gene'] if embedding == 'gene' else cell['cell_emb_text'])
+                    if embedding == 'gene':
+                        emb = cell['cell_emb_gene']
+                    elif embedding == 'text':
+                        emb = cell['cell_emb_text']
+                    elif embedding == 'geneformer':
+                        emb = cell['cell_emb_geneformer']
+                    result_embedding.append(emb)
                     result_cell_type.append(cell['cell_type'])
             result = pd.DataFrame(result_embedding)
             result['cell_type'] = result_cell_type
@@ -78,8 +91,13 @@ class Embedder:
                     index, = np.where(cell['input_ids'] == g)
                     if len(index) > 0:
                         index = index[0]
-                        result_embedding.append(
-                            cell['text_emb'][index, :] if embedding == 'text' else cell['gene_emb'][index, :])
+                        if embedding == 'gene':
+                            emb = cell['gene_emb'][index, :]
+                        elif embedding == 'text':
+                            emb = cell['text_emb'][index, :]
+                        elif embedding == 'geneformer':
+                            emb = cell['geneformer_emb'][index, :]
+                        result_embedding.append(emb)
                         result_gene.append(g)
                         result_cell_type.append(cell['cell_type'])
         result = pd.DataFrame(np.array(result_embedding))
@@ -93,7 +111,7 @@ class Embedder:
             if k == 0:
                 continue
             result.append(
-                model.text_encoder.projection_forward(v).detach().numpy())
+                model.text_encoder.projection_forward(v).detach().cpu().numpy())
         return np.stack(result)
 
 # %%
