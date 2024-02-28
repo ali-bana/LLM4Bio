@@ -38,7 +38,7 @@ dataset.setup('')
 
 model = TextGeneContrastive(config)
 model.build_summary_table(
-    dataset._get_tokenized_gene_sunmmaries(True))
+    dataset.get_summaries(mode='gene' if not config['use_cell_type'] else 'gene_cell', tokenized=True))
 
 with open('gene_cell_bert_summary.json', 'w') as f:
     json.dump(model.summary_table, f)

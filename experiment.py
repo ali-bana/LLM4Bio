@@ -37,7 +37,7 @@ dataset.setup('')
 
 model = TextGeneContrastive(config)
 model.load_state_dict(checkpoint['state_dict'])
-model.build_summary_table(dataset._get_tokenized_gene_sunmmaries(True))
+model.build_summary_table(dataset.get_summaries(True))
 # %%
 embedder = Embedder(dataset.token_dictionary,
                     dataset.cell2index,

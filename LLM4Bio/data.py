@@ -134,40 +134,39 @@ class LLM4Bio_data(LightningDataModule):
                           batch_size=self.batch_size,
                           collate_fn=self.collator)
 
-    def _get_tokenized_gene_sunmmaries(self, tokenized=True):
+    def get_summaries(self, mode='gene', tokenized=True, use_names=False):
         summariers = {}
-        if not self.config['use_cell_type']:
+        if mode == 'gene':
             for gene in self.available_genes:
+                key = self.token_dictionary[gene] if not use_names else gene
                 if tokenized:
-                    summariers[self.token_dictionary[gene]] = self.text_tokenizer(
+                    summariers[key] = self.text_tokenizer(
                         self.gene_summary[gene], return_tensors="pt")
                 else:
-                    summariers[self.token_dictionary[gene]
-                               ] = self.gene_summary[gene]
-        else:
-            # for gene in self.available_genes:
-            #     desc = self.gene_summary[gene] + \
-            #         f' Expressed in {cell_type}. ' + \
-            #         self.ontology[cell_type]
-            #     if tokenized:
-            #         summariers[idx][self.token_dictionary[gene]] = self.text_tokenizer(
-            #             desc, return_tensors="pt")
-            #     else:
-            #         summariers[idx][self.token_dictionary[gene]
-            #                         ] = desc
+                    summariers[key] = self.gene_summary[gene]
+        elif mode == 'gene_cell':
             cells = [idx for idx in self.cell2index.values()]
             for gene in self.available_genes:
                 sentences = []
                 for cell in cells:
                     sentences.append(
                         self.gene_summary[gene] + f' Expressed in {self.index2cell[cell]}. ' + self.ontology[self.index2cell[cell]])
+                    key = self.token_dictionary[gene] if not use_names else gene
                     if tokenized:
-                        summariers[self.token_dictionary[gene]] = self.text_tokenizer(
+                        summariers[key] = self.text_tokenizer(
                             sentences, return_tensors="pt", padding=True, max_length=512, truncation=True)
                     else:
-                        summariers[self.token_dictionary[gene]
-                                   ] = sentences
+                        summariers[key] = sentences
+            if use_names:
+                cells = [self.index2cell[idx] for idx in cells]
             return summariers, cells
+        elif mode == 'cell':
+            for cell in self.cell2index.keys():
+                if tokenized:
+                    summariers[self.cell2index[cell]] = self.text_tokenizer(
+                        self.ontology[cell], return_tensors="pt")
+                else:
+                    summariers[self.cell2index[cell]] = self.ontology[cell]
         return summariers
 
     def build_summary_table(self, tokenized_gene_summary: dict):

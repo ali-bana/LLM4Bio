@@ -156,6 +156,27 @@ class TextGeneContrastive(LightningModule):
                     for i, cell in enumerate(cells):
                         self.summary_table[cell][gene] = out[i][0]
 
+    def encode_summaries(self, tokenized_summaries):
+        result = {}
+        if isinstance(tokenized_summaries, dict):
+            with torch.no_grad():
+                for key in tokenized_summaries.keys():
+                    result[key] = self.text_encoder.forward(
+                        tokenized_summaries[key].to(self.text_encoder.model.device))[0][0].detach().cpu().numpy()
+
+        else:
+            with torch.no_grad():
+                summaries, cells = tokenized_summaries
+                for cell in cells:
+                    result[cell] = dict()
+                for gene in tqdm(summaries.keys(), desc="Encoding Sumaries"):
+                    out = self.text_encoder.forward(
+                        summaries[gene].to(self.text_encoder.model.device))
+                    for i, cell in enumerate(cells):
+                        result[cell][gene] = out[i][0].detach().cpu().numpy()
+                    del out
+        return result
+
     def forward(self, inputs) -> Any:
         gene_enc = self.gene_encoder.forward(inputs)
         input_ids = inputs['input_ids']

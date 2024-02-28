@@ -20,12 +20,12 @@ class Embedder:
         self.hgnc2ensmbl = hgnc2ensmbl
         self.ensmbl2hgnc = {v: k for k, v in hgnc2ensmbl.items()}
 
-    def get_embed(self, model, dataloader, n_cells=-1, include=['gene_emb', 'text_emb', 'geneformer_emb', 'cell_emb_geneformer']):
+    def get_embed(self, model, dataloader, n_cells=-1, include=['gene_emb', 'text_emb', 'geneformer_emb', 'cell_emb_geneformer', 'cell_emb_gene', 'cell_emb_text']):
         result = []
         counter = 0
         for batch in tqdm(dataloader):
             with torch.no_grad():
-                out = model.forward(batch)
+                out = model.forward(batch.to(model.device))
             length = batch['length']
             gene_encs = out['gene_enc']
             text_encs = out['text_enc']
@@ -46,10 +46,12 @@ class Embedder:
                 if 'cell_emb_geneformer' in include:
                     cell_dict['cell_emb_geneformer'] = out['geneformer_encoded'][i,
                                                                                  :length[i], :].mean(dim=0).detach().cpu().numpy()
-                cell_dict['cell_emb_gene'] = gene_encs[i,
-                                                       :length[i], :].mean(dim=0).detach().cpu().numpy()
-                cell_dict['cell_emb_text'] = text_encs[i,
-                                                       :length[i], :].mean(dim=0).detach().cpu().numpy()
+                if 'cell_emb_gene' in include:
+                    cell_dict['cell_emb_gene'] = gene_encs[i,
+                                                           :length[i], :].mean(dim=0).detach().cpu().numpy()
+                if 'cell_emb_text' in include:
+                    cell_dict['cell_emb_text'] = text_encs[i,
+                                                           :length[i], :].mean(dim=0).detach().cpu().numpy()
                 cell_dict['cell_type'] = self.id2cell_type[batch['cell_type'][i].item()]
                 cell_dict['input_ids'] = batch['input_ids'][i,
                                                             :length[i]].detach().cpu().numpy()
