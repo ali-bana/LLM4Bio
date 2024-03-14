@@ -52,7 +52,7 @@ class LLM4Bio_data(LightningDataModule):
                 self.data_dir, 'cell_type_ontology.txt')
         hgnc2ensmbl_url = 'https://drive.google.com/uc?export=download&id=1s9K_tV2f_n6zONtUt6_lTQY_9FYhvZfm'
         hgnc2ensmbl_path = os.path.join(
-            self.data_dir, 'hgnc2ensmbl.txt')
+            self.data_dir, 'hgnc2ensembl.txt')
         if not os.path.exists(adata_path):
             gdown.download(adata_url, adata_path, quiet=False)
         if not os.path.exists(gene_summary_path):
@@ -117,6 +117,8 @@ class LLM4Bio_data(LightningDataModule):
             token_dictionary=self.token_dictionary)
         self.collator = DataCollatorForLanguageModeling(
             tokenizer=precollator, mlm=False)
+        # self.collator = DataCollatorForLanguageModeling(
+        #     tokenizer=precollator, mlm=True)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
@@ -134,17 +136,21 @@ class LLM4Bio_data(LightningDataModule):
                           batch_size=self.batch_size,
                           collate_fn=self.collator)
 
-    def get_summaries(self, mode='gene', tokenized=True, use_names=False):
-        summariers = {}
-        if mode == 'gene':
+    def get_summaries(self, mode, tokenized=True, use_names=False):
+        if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
+            raise ValueError(f'mode {mode} is not defined!')
+        result = {}
+        gene_summariers = {}
+        if 'gene' in mode:
             for gene in self.available_genes:
                 key = self.token_dictionary[gene] if not use_names else gene
                 if tokenized:
-                    summariers[key] = self.text_tokenizer(
+                    gene_summariers[key] = self.text_tokenizer(
                         self.gene_summary[gene], return_tensors="pt")
                 else:
-                    summariers[key] = self.gene_summary[gene]
-        elif mode == 'gene_cell':
+                    gene_summariers[key] = self.gene_summary[gene]
+            result['gene'] = gene_summariers
+        elif 'concat' in mode:
             cells = [idx for idx in self.cell2index.values()]
             for gene in self.available_genes:
                 sentences = []
@@ -153,21 +159,25 @@ class LLM4Bio_data(LightningDataModule):
                         self.gene_summary[gene] + f' Expressed in {self.index2cell[cell]}. ' + self.ontology[self.index2cell[cell]])
                     key = self.token_dictionary[gene] if not use_names else gene
                     if tokenized:
-                        summariers[key] = self.text_tokenizer(
+                        gene_summariers[key] = self.text_tokenizer(
                             sentences, return_tensors="pt", padding=True, max_length=512, truncation=True)
                     else:
-                        summariers[key] = sentences
+                        gene_summariers[key] = sentences
             if use_names:
                 cells = [self.index2cell[idx] for idx in cells]
-            return summariers, cells
-        elif mode == 'cell':
+            result['gene'] = (gene_summariers, cells)
+        result['cell'] = {}
+        if 'celltype' in mode:
+            cell_summaries = {}
             for cell in self.cell2index.keys():
                 if tokenized:
-                    summariers[self.cell2index[cell]] = self.text_tokenizer(
+                    cell_summaries[self.cell2index[cell]] = self.text_tokenizer(
                         self.ontology[cell], return_tensors="pt")
                 else:
-                    summariers[self.cell2index[cell]] = self.ontology[cell]
-        return summariers
+                    cell_summaries[self.cell2index[cell]
+                                   ] = self.ontology[cell]
+            result['cell'] = cell_summaries
+        return result
 
     def build_summary_table(self, tokenized_gene_summary: dict):
         self.summary_table = {}

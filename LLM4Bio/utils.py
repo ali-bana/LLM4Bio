@@ -1,5 +1,5 @@
+import torch.nn.functional as F
 from scipy.spatial import distance
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import math
 import torch
@@ -56,3 +56,26 @@ def get_cosines(embeddings):
             similarities[i, j] = 1 - distance.cosine(
                 embeddings[i], embeddings[j])
     return similarities
+
+
+def clip(gene_emb, text_emb, temperature=1.0):
+    logits = (text_emb @ gene_emb.T) / temperature
+    targets = torch.arange(logits.shape[0]).to(logits.device)
+    tl = F.cross_entropy(logits, targets)
+    gl = F.cross_entropy(logits.T, targets)
+    loss = ((tl + gl) / (2.0))
+    return {'loss': loss, 'text_loss': tl, 'gene_loss': gl}
+
+
+def has_same_shape(list_array):
+    if len(list_array) <= 1:
+        return True
+    if isinstance(list_array[0], list):
+        raise ValueError('list_array should be a list of np.arrays')
+    if not isinstance(list_array[0], np.ndarray):
+        return True
+    shape = list_array[0].shape
+    for array in list_array:
+        if array.shape != shape:
+            return False
+    return True

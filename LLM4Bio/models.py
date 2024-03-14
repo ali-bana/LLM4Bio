@@ -7,6 +7,7 @@ from .utils import trunc_normal_
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
+from .utils import clip
 
 
 class TextEncoder(nn.Module):
@@ -126,38 +127,49 @@ class TextGeneContrastive(LightningModule):
         self.embed_dim = config['emb_dim']
         self.text_encoder = TextEncoder(config)
         self.gene_encoder = GeneEncoder(config)
-        self.summary_table = dict()
+        self.gene_summary_table = dict()
+        self.cell_summary_table = dict()
         self.temperature = 1
         self.lr = config['lr']
         self.text_tokenizer = AutoTokenizer.from_pretrained(
             'michiyasunaga/BioLinkBERT-large')  # add this to dataloader
         self.freeze_bert = config['freeze_text_model']
         self.use_cell_type = config['use_cell_type']
+        self.mode = config['loss_type']
 
-    def build_summary_table(self, tokenized_gene_summary: dict):
+    def build_summary_table(self, summaries: dict):
         if not self.freeze_bert:
             return
-        if not self.use_cell_type:
+        gene_summaries, cell_summariers = summaries['gene'], summaries['cell']
+
+        if not 'concat' in self.mode:
             with torch.no_grad():
-                for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
-                    self.summary_table[gene] = self.text_encoder.llm_forward(
-                        tokenized_gene_summary[gene])[0][0]
-                self.summary_table[0] = torch.zeros(768)
+                for gene in tqdm(gene_summaries.keys(), desc="Building gene summary table"):
+                    self.gene_summary_table[gene] = self.text_encoder.llm_forward(
+                        gene_summaries[gene].to(self.device))[0][0].cpu()
+                self.gene_summary_table[0] = torch.zeros(768)
+                self.gene_summary_table[1] = torch.zeros(768)
         else:
             with torch.no_grad():
-                summaries, cells = tokenized_gene_summary
+                gene_summaries, cells = gene_summaries
                 for cell in cells:
-                    self.summary_table[cell] = dict()
-                    self.summary_table[cell][0] = torch.zeros(
-                        768).to(self.text_encoder.model.device)
-                for gene in tqdm(summaries.keys(), desc="Building summary table"):
+                    self.gene_summary_table[cell] = dict()
+                    self.gene_summary_table[cell][0] = torch.zeros(768)
+                    self.gene_summary_table[cell][1] = torch.zeros(768)
+                for gene in tqdm(gene_summaries.keys(), desc="Building gene summary table"):
                     out = self.text_encoder.llm_forward(
-                        summaries[gene].to(self.text_encoder.model.device))
+                        gene_summaries[gene].to(self.text_encoder.model.device))
                     for i, cell in enumerate(cells):
-                        self.summary_table[cell][gene] = out[i][0]
+                        self.gene_summary_table[cell][gene] = out[i][0].cpu()
+        if 'celltype' in self.mode:
+            with torch.no_grad():
+                for cell in tqdm(cell_summariers.keys(), desc="Building cell summary table"):
+                    self.cell_summary_table[cell] = self.text_encoder.llm_forward(
+                        cell_summariers[cell].to(self.device))[0][0].cpu()
 
-    def encode_summaries(self, tokenized_summaries):
+    def encode_summaries(self, tokenized_summaries, dict_key='gene'):
         result = {}
+        tokenized_summaries = tokenized_summaries[dict_key]
         if isinstance(tokenized_summaries, dict):
             with torch.no_grad():
                 for key in tokenized_summaries.keys():
@@ -178,23 +190,32 @@ class TextGeneContrastive(LightningModule):
         return result
 
     def forward(self, inputs) -> Any:
-        gene_enc = self.gene_encoder.forward(inputs)
+        geneformer_encoding = self.gene_encoder.gene_encoder_forward(inputs)
+        gene_enc = self.gene_encoder.projection_forward(geneformer_encoding)
+        cell_enc = (gene_enc *
+                    inputs['attention_mask'][:, :, None]).sum(dim=1)
+        cell_enc = cell_enc / inputs['length'][:, None]
         input_ids = inputs['input_ids']
-        text_enc = []
+        gene_text_enc = []
+        cell_text_enc = []
         if self.freeze_bert:
-            if not self.use_cell_type:
+            if not 'concat' in self.mode:
                 for i in range(input_ids.shape[0]):
                     emb = []
                     for j in range(input_ids.shape[1]):
-                        emb.append(self.summary_table[input_ids[i, j].item()])
-                    text_enc.append(torch.stack(emb))
+                        emb.append(
+                            self.gene_summary_table[input_ids[i, j].item()])
+                    gene_text_enc.append(torch.stack(emb))
             else:
                 for i in range(input_ids.shape[0]):
                     emb = []
                     for j in range(input_ids.shape[1]):
                         emb.append(
-                            self.summary_table[inputs['cell_type'][i].item()][input_ids[i, j].item()])
-                    text_enc.append(torch.stack(emb))
+                            self.gene_summary_table[inputs['cell_type'][i].item()][input_ids[i, j].item()])
+                    gene_text_enc.append(torch.stack(emb))
+            if 'celltype' in self.mode:
+                for cell in inputs['cell_type']:
+                    cell_text_enc.append(self.cell_summary_table[cell.item()])
 
         else:
             # must be changed
@@ -203,12 +224,20 @@ class TextGeneContrastive(LightningModule):
                        for j in range(input_ids.shape[1])]
                 ins = self.text_tokenizer(
                     ins, padding=True, return_tensors='pt').to(gene_enc.device)
-                text_enc.append(self.text_encoder.llm_forward(ins).mean(dim=1))
-        text_enc = torch.stack(text_enc).to(gene_enc.device)
-        text_enc = self.text_encoder.projection_forward(
-            text_enc)
+                gene_text_enc.append(
+                    self.text_encoder.llm_forward(ins).mean(dim=1))
+        gene_text_enc = torch.stack(gene_text_enc).to(gene_enc.device)
+        gene_text_enc = self.text_encoder.projection_forward(
+            gene_text_enc)
+        cell_text_enc = torch.stack(cell_text_enc).to(gene_enc.device)
+        cell_text_enc = self.text_encoder.projection_forward(cell_text_enc)
 
-        return {'gene_enc': gene_enc, 'text_enc': text_enc, 'geneformer_encoded': self.gene_encoder.gene_encoder_forward(inputs)}
+        return {'gene_enc': gene_enc,
+                'cell_enc': cell_enc,
+                'text_enc': gene_text_enc,
+                'cell_text_enc': cell_text_enc,
+                'geneformer_encoded': geneformer_encoding
+                }
 
     def loss(self, inputs, outputs):
         gene_loss = 0
@@ -218,25 +247,17 @@ class TextGeneContrastive(LightningModule):
         for i in range(inputs['input_ids'].shape[0]):
             text_embedding = outputs['text_enc'][i, :length[i]]
             gene_embedding = outputs['gene_enc'][i, :length[i]]
-            logits = (text_embedding @ gene_embedding.T) / self.temperature
-            targets = torch.arange(logits.shape[0]).to(logits.device)
-            tl = F.cross_entropy(logits, targets)
-            gl = F.cross_entropy(logits.T, targets)
-            loss += ((tl + gl) / (2.0))
-            text_loss += tl
-            gene_loss += gl
+            cell_loss = clip(gene_embedding, text_embedding, self.temperature)
+            loss += cell_loss['loss']
+            text_loss += cell_loss['text_loss']
+            gene_loss += cell_loss['gene_loss']
+        if 'celltype' in self.mode:
+            cell_loss = clip(outputs['cell_enc'],
+                             outputs['cell_text_enc'], self.temperature)
+            loss += cell_loss['loss']
+            text_loss += cell_loss['text_loss']
+            gene_loss += cell_loss['gene_loss']
         return {'gene_loss': gene_loss, 'text_loss': text_loss, 'loss': loss}
-
-    def _clip_with_logits(self, logits):
-        n = logits.shape[1]      # number of samples
-        labels = torch.arange(n)  # Create labels tensor
-        # Calculate cross entropy losses along axis 0 and 1
-        loss_i = F.cross_entropy(logits.transpose(
-            0, 1), labels, reduction="mean")
-        loss_t = F.cross_entropy(logits, labels, reduction="mean")
-        # Calculate the final loss
-        loss = (loss_i + loss_t) / 2
-        return loss
 
     def training_step(self, batch, batch_idx):
         outputs = self.forward(batch)

@@ -2,6 +2,66 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+from .utils import has_same_shape
+
+
+class Embedding:
+    def __init__(self, emb_list) -> None:
+        self.embedded = emb_list
+
+    def append(self, emb):
+        if len(self.embedded) > 0:
+            if not list(emb.keys()) == list(self.embedded[0].keys()):
+                raise ValueError(
+                    'The keys of the new cell are not the same as the previous ones')
+        self.embedded.append(emb)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self.embedded[key]
+        if isinstance(key, str):
+            if not key in self.embedded[0].keys():
+                raise ValueError(f'{key} is not a valid key')
+            values = [c[key] for c in self.embedded]
+            if has_same_shape(values):
+                return np.array(values)
+            else:
+                result = []
+                for c in values:
+                    for v in c:
+                        result.append(v)
+                return np.array(result)
+
+    def __str__(self) -> str:
+        return f'EmbeddedCells with {len(self.embedded)} cells' + '\n' + f'Keys: {list(self.embedded[0].keys())}'
+
+    def get_gene_embedding(self, gene):
+        ''' returns two np.arrays, one embedding of the gene in all cells and the cell types'''
+        result = []
+        cell_types = []
+        for cell in self.embedded:
+            index, = np.where(cell['input_ids'] == gene)
+            if len(index) > 0:
+                index = index[0]
+                result.append(cell['gene_emb'][index, :])
+                cell_types.append(cell['cell_type'])
+        if len(result) == 0:
+            raise ValueError(f'Gene {gene} not found in any cell')
+        return np.stack(result), np.array(cell_types)
+
+    def get_cell_embedding(self):
+        return self['cell_emb_gene'], self['cell_type']
+
+    def get_all_gene_embedding(self, key_embedding_key='gene_emb'):
+        ct = []
+        gene = []
+        embs = []
+        for c in self.embedded:
+            for i, g in enumerate(c['input_ids']):
+                ct.append(c['cell_type'])
+                gene.append(g)
+                embs.append(c[key_embedding_key][i, :])
+        return np.array(embs), np.array(ct), np.array(gene)
 
 
 class Embedder:
@@ -21,7 +81,7 @@ class Embedder:
         self.ensmbl2hgnc = {v: k for k, v in hgnc2ensmbl.items()}
 
     def get_embed(self, model, dataloader, n_cells=-1, include=['gene_emb', 'text_emb', 'geneformer_emb', 'cell_emb_geneformer', 'cell_emb_gene', 'cell_emb_text']):
-        result = []
+        result = Embedding([])
         counter = 0
         for batch in tqdm(dataloader):
             with torch.no_grad():
@@ -29,6 +89,7 @@ class Embedder:
             length = batch['length']
             gene_encs = out['gene_enc']
             text_encs = out['text_enc']
+            cell_encs = out['cell_enc']
             for i in range(gene_encs.shape[0]):
                 counter += 1
                 if n_cells > -1 and counter > n_cells:
@@ -47,8 +108,8 @@ class Embedder:
                     cell_dict['cell_emb_geneformer'] = out['geneformer_encoded'][i,
                                                                                  :length[i], :].mean(dim=0).detach().cpu().numpy()
                 if 'cell_emb_gene' in include:
-                    cell_dict['cell_emb_gene'] = gene_encs[i,
-                                                           :length[i], :].mean(dim=0).detach().cpu().numpy()
+                    cell_dict['cell_emb_gene'] = cell_encs[i].detach(
+                    ).cpu().numpy()
                 if 'cell_emb_text' in include:
                     cell_dict['cell_emb_text'] = text_encs[i,
                                                            :length[i], :].mean(dim=0).detach().cpu().numpy()
@@ -70,7 +131,7 @@ class Embedder:
         result_gene = []
         result_cell_type = []
 
-        if mode == 'cell':
+        if mode == 'cellembedded_labels':
             for cell in embedded:
                 if cell_types is None or cell['cell_type'] in cell_types:
                     if embedding == 'gene':
