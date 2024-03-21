@@ -12,6 +12,7 @@ from LLM4Bio.models import TextGeneContrastive
 from LLM4Bio.embed import Embedder
 from LLM4Bio.perturb import perturb
 from LLM4Bio.zero_shot_classification import classify
+from sklearn import svm
 save_dir = './saves'
 data_dir = './data'
 config = {
@@ -39,42 +40,14 @@ dataset.prepare_data()
 dataset.setup('')
 
 
-selected_genes = ['ENSG00000107317', 'ENSG00000101162', 'ENSG00000197561']
-selected_genes = [dataset.token_dictionary[g] for g in selected_genes]
-
-
 model = TextGeneContrastive(config)
 model.build_summary_table(
     dataset.get_summaries(mode=config['loss_type']))
 
-emb, ct, g = perturb(model, dataset.val_dataloader())
-print(emb.shape, ct.shape, g.shape)
-# embedder = Embedder(dataset.token_dictionary, dataset.cell2index,
-#                     dataset.gene2ensembl)
-# embedded_data = embedder.get_embed(
-#     model, dataset.val_dataloader(), n_cells=100)
+
+embs, ct, genes = perturb(model, dataset.test_dataloader(), n_cells=100, keys=[
+                          'gene_enc', 'geneformer_encoded'])
 
 
-# embs, ct, gene = embedded_data.get_all_gene_embedding()
-# print(gene[:10])
-# print(ct[:10])
-# encoded_summaries = model.encode_summaries(
-#     dataset.get_summaries('gene', use_names=True))
-# gene_pred = classify(embs, encoded_summaries, mode='gene')
-# print(gene_pred[:10])
-
-# encoded_summaries = model.encode_summaries(
-#     dataset.get_summaries('concat_celltype', use_names=True))
-# cell_pred, gene_pred = classify(embs, encoded_summaries, mode='concat')
-# print(gene_pred.shape, cell_pred.shape)
-# print(cell_pred[:10], gene_pred[:10])
-# encoded_summaries = model.encode_summaries(
-#     dataset.get_summaries('concat_celltype', use_names=True), dict_key='cell')
-# gene_pred = classify(embs, encoded_summaries, mode='cell')
-# print(gene_pred.shape)
-# print(gene_pred[:10])
-# # # %%
-# logger = TensorBoardLogger("temp", name="my_model")
-# trainer = Trainer(max_epochs=100, logger=logger)
-# trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
-#             val_dataloaders=dataset.val_dataloader())
+print(embs['gene_enc'].shape, ct.shape,
+      genes.shape, embs['geneformer_encoded'].shape)

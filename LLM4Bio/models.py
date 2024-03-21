@@ -136,6 +136,7 @@ class TextGeneContrastive(LightningModule):
         self.freeze_bert = config['freeze_text_model']
         self.use_cell_type = config['use_cell_type']
         self.mode = config['loss_type']
+        self.config = config
 
     def build_summary_table(self, summaries: dict):
         if not self.freeze_bert:

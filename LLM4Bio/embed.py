@@ -35,7 +35,7 @@ class Embedding:
     def __str__(self) -> str:
         return f'EmbeddedCells with {len(self.embedded)} cells' + '\n' + f'Keys: {list(self.embedded[0].keys())}'
 
-    def get_gene_embedding(self, gene):
+    def get_gene_embedding(self, gene, key='gene_emb'):
         ''' returns two np.arrays, one embedding of the gene in all cells and the cell types'''
         result = []
         cell_types = []
@@ -43,7 +43,7 @@ class Embedding:
             index, = np.where(cell['input_ids'] == gene)
             if len(index) > 0:
                 index = index[0]
-                result.append(cell['gene_emb'][index, :])
+                result.append(cell[key][index, :])
                 cell_types.append(cell['cell_type'])
         if len(result) == 0:
             raise ValueError(f'Gene {gene} not found in any cell')
@@ -55,13 +55,23 @@ class Embedding:
     def get_all_gene_embedding(self, key_embedding_key='gene_emb'):
         ct = []
         gene = []
-        embs = []
+        embs = {k: [] for k in key_embedding_key} if isinstance(
+            key_embedding_key, list) else []
         for c in self.embedded:
             for i, g in enumerate(c['input_ids']):
                 ct.append(c['cell_type'])
                 gene.append(g)
-                embs.append(c[key_embedding_key][i, :])
-        return np.array(embs), np.array(ct), np.array(gene)
+                if type(key_embedding_key) == list:
+                    for k in key_embedding_key:
+                        embs[k].append(c[k][i, :])
+                else:
+                    embs.append(c[key_embedding_key][i, :])
+        if type(key_embedding_key) == list:
+            for k in key_embedding_key:
+                embs[k] = np.array(embs[k])
+            return embs, np.array(ct), np.array(gene)
+        else:
+            return np.array(embs), np.array(ct), np.array(gene)
 
 
 class Embedder:

@@ -9,13 +9,11 @@ def _in_indices(array, tokens):
     return inside
 
 
-def perturb(model, data_loader, selected_tokens=[]):
-    embeddings, cell_types, genes = [], [], []
-    count = 0
+def perturb(model, data_loader, selected_tokens=[], keys=['gene_emb'], n_cells=-1):
+    embeddings, cell_types, genes = {k: [] for k in keys}, [], []
     for batch in tqdm(data_loader):
-        # count += 1
-        # if count > 10:
-        #     break
+        if (n_cells > 0) and (len(cell_types) > n_cells):
+            break
         with torch.no_grad():
             idxs = []
             for i in range(batch['input_ids'].shape[0]):
@@ -36,11 +34,13 @@ def perturb(model, data_loader, selected_tokens=[]):
             for i, idx in enumerate(idxs):
                 if idx == -1:
                     continue
-                embeddings.append(
-                    out['gene_enc'][i, idx].detach().cpu().numpy())
+                for key in keys:
+                    embeddings[key].append(
+                        out[key][i, idx].detach().cpu().numpy())
                 cell_types.append(batch['cell_type'][i].item())
-
-    return np.stack(embeddings), np.array(cell_types), np.array(genes)
+    for key in keys:
+        embeddings[key] = np.stack(embeddings[key])
+    return embeddings, np.array(cell_types), np.array(genes)
 
 
 if __name__ == '__main__':
