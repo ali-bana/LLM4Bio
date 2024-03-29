@@ -75,7 +75,7 @@ from transformers import AutoTokenizer
 #         return np.concatenate(true_classes), np.concatenate(pred_classes)
 
 
-def classify(embeddings, embedded_labels, mode='gene'):
+def classify(embeddings, embedded_labels, mode='gene', return_all=False):
     if not mode in ['gene', 'cell', 'concat']:
         raise ValueError('mode must be "gene", "cell" or "gene_cell"')
     if mode == 'concat':
@@ -97,7 +97,8 @@ def classify(embeddings, embedded_labels, mode='gene'):
             cell_types), np.array(genes), np.stack(el)
 
         logits = embeddings @ embedded_labels.T
-
+        if return_all:
+            return cell_types_labels[np.argsort(logits, axis=1)], genes_labels[np.argsort(logits, axis=1)]
         return cell_types_labels[np.argmax(logits, axis=1)], genes_labels[np.argmax(logits, axis=1)]
 
     else:
@@ -111,5 +112,6 @@ def classify(embeddings, embedded_labels, mode='gene'):
             el.append(v)
         labels, embedded_labels = np.array(l), np.stack(el)
         logits = embeddings @ embedded_labels.T
-        preds = labels[np.argmax(logits, axis=1)]
-        return preds
+        if return_all:
+            return labels[np.argsort(logits, axis=1)]
+        return labels[np.argmax(logits, axis=1)]

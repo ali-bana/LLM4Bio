@@ -79,3 +79,19 @@ def has_same_shape(list_array):
         if array.shape != shape:
             return False
     return True
+
+
+def top_k_accuracy(true_label, sorted_labels, k):
+    if len(true_label) != len(sorted_labels):
+        raise ValueError(
+            'true_label and sorted_labels should have the same length')
+    if len(true_label) == 0:
+        raise ValueError('true_label and sorted_labels should not be empty')
+    if k > sorted_labels.shape[1]:
+        raise ValueError(
+            'k should be less than or equal to the length of sorted_labels')
+    if len(true_label.shape) != 1:
+        raise ValueError('true_label should be a 1D array')
+    n = true_label.shape[0]
+    true_label = true_label[:, None].repeat(k, axis=1)
+    return np.sum(np.any(true_label == sorted_labels[:, :k], axis=1)) / n

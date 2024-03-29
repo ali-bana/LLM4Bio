@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModel
 import torch
 from tqdm import tqdm
+import numpy as np
 
 
 class LLM4Bio_data(LightningDataModule):
@@ -68,11 +69,13 @@ class LLM4Bio_data(LightningDataModule):
             self.gene_summary = json.load(f)
         with open(cell_ontology_path, 'r') as f:
             self.ontology = json.load(f)
-        print(adata_path)
-        adata = sc.read(adata_path)
-        loom_path = os.path.join(self.data_dir, 'loom')
-        if not os.path.exists(loom_path):
-            os.makedirs(loom_path)
+        adata = sc.read_h5ad(adata_path)
+        loom_path_train = os.path.join(self.data_dir, 'loom', 'train')
+        loom_path_test = os.path.join(self.data_dir, 'loom', 'test')
+        if not os.path.exists(loom_path_test):
+            os.makedirs(loom_path_test)
+        if not os.path.exists(loom_path_train):
+            os.makedirs(loom_path_train)
         sc.pp.highly_variable_genes(adata, n_top_genes=self.n_top_genes)
         adata = adata[:, adata.var.highly_variable]
         import pandas as pd
@@ -87,30 +90,62 @@ class LLM4Bio_data(LightningDataModule):
             self.gene2ensembl, index=adata.var_names).values
         self.cell2index = {item: i for i, item in enumerate(
             adata.obs['cell_type'].unique())}
-        adata.obs['cell_type'].replace(self.cell2index, inplace=True)
+        idxs = np.full(adata.shape[0], False)
+        idxs[np.random.choice(adata.shape[0], int(
+            adata.shape[0]*0.15), replace=False)] = True
+        if 'leave_out_celltypes' in self.config.keys() and len(self.config['leave_out_celltypes']) > 0:
+            leave_out = adata.obs['cell_type'].isin(
+                self.config['leave_out_celltypes'])
+            idxs = pd.Series(idxs, index=adata.obs.index) | leave_out
+        test_adata = adata[idxs].copy()
+        train_adata = adata[~idxs].copy()
+        if 'leave_out_genes' in self.config.keys() and len(self.config['leave_out_genes']) > 0:
+            train_adata = train_adata[:, ~train_adata.var_names.isin(
+                self.config['leave_out_genes'])].copy()
+
+        print('train adata:\n', train_adata)
+        print('test_adata:\n', test_adata)
+        train_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
+        test_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         self.index2cell = {v: k for k, v in self.cell2index.items()}
-        adata.write_loom(os.path.join(loom_path, 'pbmc.loom'), True)
+        test_adata.write_loom(os.path.join(
+            loom_path_test, 'pbmc_test.loom'), True)
+        train_adata.write_loom(os.path.join(
+            loom_path_train, 'pbmc_train.loom'), True)
         tk = TranscriptomeTokenizer({"cell_type": "cell_type"}, nproc=16)
-        self.tokenized_path = os.path.join(self.data_dir, 'tokenized')
-        tk.tokenize_data(loom_path,
-                         self.tokenized_path,
+        self.tokenized_path_train = os.path.join(
+            self.data_dir, 'tokenized', 'train')
+        self.tokenized_path_test = os.path.join(
+            self.data_dir, 'tokenized', 'test')
+        tk.tokenize_data(loom_path_train,
+                         self.tokenized_path_train,
                          "",
                          file_format="loom")
-        self.tokenized_path = os.path.join(self.data_dir, 'tokenized.dataset')
-        self.available_genes = adata.var_names.values
-        self.available_genes = [self.gene2ensembl[g]
-                                for g in self.available_genes]
-        # if self.config['freeze_text_model']:
-        #     self.build_summary_table(
-        #         self._get_tokenized_gene_sunmmaries(tokenized=True))
+        tk.tokenize_data(loom_path_test,
+                         self.tokenized_path_test,
+                         "",
+                         file_format="loom")
+        self.tokenized_path_train += '.dataset'
+        self.tokenized_path_test += '.dataset'
+        self.available_genes_train = train_adata.var_names.values
+        self.available_genes_train = [self.gene2ensembl[g]
+                                      for g in self.available_genes_train]
+        self.available_genes_test = test_adata.var_names.values
+        self.available_genes_test = [self.gene2ensembl[g]
+                                     for g in self.available_genes_test]
+        self.available_genes = list(
+            set(self.available_genes_train+self.available_genes_test))
+        self.available_cells_train = [self.index2cell[i]
+                                      for i in train_adata.obs['cell_type'].unique()]
+        self.available_cells_test = [self.index2cell[i]
+                                     for i in test_adata.obs['cell_type'].unique()]
 
     def setup(self, stage: str) -> None:
-        dataset = load_from_disk(self.tokenized_path).shuffle(
+        train_dataset = load_from_disk(self.tokenized_path_train).shuffle(
             seed=42).train_test_split(0.2)
-        self.test_dataset = dataset['test']
-        dataset = dataset['train'].train_test_split(0.15)
-        self.train_dataset = dataset['train']
-        self.val_dataset = dataset['test']
+        self.val_dataset = train_dataset['test']
+        self.train_dataset = train_dataset['train']
+        self.test_dataset = load_from_disk(self.tokenized_path_test)
         with open("LLM4Bio/Geneformer/token_dictionary.pkl", "rb") as fp:
             self.token_dictionary = pickle.load(fp)
         precollator = GeneformerPreCollator(
@@ -170,12 +205,12 @@ class LLM4Bio_data(LightningDataModule):
         if 'celltype' in mode:
             cell_summaries = {}
             for cell in self.cell2index.keys():
+                key = cell if use_names else self.cell2index[cell]
                 if tokenized:
-                    cell_summaries[self.cell2index[cell]] = self.text_tokenizer(
+                    cell_summaries[key] = self.text_tokenizer(
                         self.ontology[cell], return_tensors="pt")
                 else:
-                    cell_summaries[self.cell2index[cell]
-                                   ] = self.ontology[cell]
+                    cell_summaries[key] = self.ontology[cell]
             result['cell'] = cell_summaries
         return result
 
