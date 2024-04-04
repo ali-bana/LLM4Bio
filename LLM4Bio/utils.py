@@ -4,6 +4,15 @@ import numpy as np
 import math
 import torch
 import warnings
+import re
+
+
+def remove_provided_by(string):
+    return re.sub(r'\[provided by .*?\]', '', string)
+
+
+def concat_gene_celltype(gene_string, cell_string, gene_name, cell_name):
+    return gene_string + f'Expressed in {cell_name} cell.' + cell_string
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):

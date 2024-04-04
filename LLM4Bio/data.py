@@ -1,18 +1,20 @@
 from lightning import LightningDataModule
 import os
 import gdown
-from lightning.pytorch.utilities.types import EVAL_DATALOADERS
 import scanpy as sc
 from .Geneformer.tokenizer import TranscriptomeTokenizer
 import pickle
 from datasets import load_from_disk
 from .Geneformer.pretrainer import GeneformerPreCollator
 from transformers import DataCollatorForLanguageModeling
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, AutoModel
 import torch
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import numpy as np
+from .utils import remove_provided_by, concat_gene_celltype
+from transformers import BatchEncoding
+from .collator import LLM4BioDataCollator
 
 
 class LLM4Bio_data(LightningDataModule):
@@ -26,9 +28,9 @@ class LLM4Bio_data(LightningDataModule):
         self.cell_ontology = config['cell_ontology']
         self.batch_size = config['batch_size']
         self.freeze_text_model = config['freeze_text_model']
-        if config['text_model'].lower() == 'biolinkbert':
+        if 'biolinkbert' in config['text_model'].lower():
             self.text_tokenizer = AutoTokenizer.from_pretrained(
-                'michiyasunaga/BioLinkBERT-large')
+                'michiyasunaga/'+config['text_model'])
         token_dictionary_path = './LLM4Bio/Geneformer/token_dictionary.pkl'
         with open(token_dictionary_path, 'rb') as f:
             self.token_dictionary = pickle.load(f)
@@ -69,6 +71,10 @@ class LLM4Bio_data(LightningDataModule):
             self.gene_summary = json.load(f)
         with open(cell_ontology_path, 'r') as f:
             self.ontology = json.load(f)
+        # clean gene_summary
+        for gene in self.gene_summary.keys():
+            self.gene_summary[gene] = remove_provided_by(
+                self.gene_summary[gene])
         adata = sc.read_h5ad(adata_path)
         loom_path_train = os.path.join(self.data_dir, 'loom', 'train')
         loom_path_test = os.path.join(self.data_dir, 'loom', 'test')
@@ -150,8 +156,25 @@ class LLM4Bio_data(LightningDataModule):
             self.token_dictionary = pickle.load(fp)
         precollator = GeneformerPreCollator(
             token_dictionary=self.token_dictionary)
-        self.collator = DataCollatorForLanguageModeling(
+        gene_collator = DataCollatorForLanguageModeling(
             tokenizer=precollator, mlm=False)
+
+        summaries_gene, summaries_cells = self._get_summaries_for_collator(
+            self.config['loss_type'], self.config['use_bert_encoded'])
+        self.train_collator = LLM4BioDataCollator(mode=self.config['loss_type'],
+                                                  return_encoded=self.config['use_bert_encoded'],
+                                                  gene_collator=gene_collator,
+                                                  text_tokenizer=self.text_tokenizer,
+                                                  summary_dict_gene=summaries_gene,
+                                                  summary_dict_cell=summaries_cells,
+                                                  aguments=self.config['text_agumentations'])
+        self.test_val_collator = LLM4BioDataCollator(mode=self.config['loss_type'],
+                                                     return_encoded=self.config['use_bert_encoded'],
+                                                     gene_collator=gene_collator,
+                                                     text_tokenizer=self.text_tokenizer,
+                                                     summary_dict_gene=summaries_gene,
+                                                     summary_dict_cell=summaries_cells,
+                                                     aguments=None)
         # self.collator = DataCollatorForLanguageModeling(
         #     tokenizer=precollator, mlm=True)
 
@@ -159,17 +182,17 @@ class LLM4Bio_data(LightningDataModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.batch_size,
                           shuffle=True,
-                          collate_fn=self.collator)
+                          collate_fn=self.train_collator)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.collator)
+                          collate_fn=self.test_val_collator)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.collator)
+                          collate_fn=self.test_val_collator)
 
     def get_summaries(self, mode, tokenized=True, use_names=False):
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
@@ -191,7 +214,10 @@ class LLM4Bio_data(LightningDataModule):
                 sentences = []
                 for cell in cells:
                     sentences.append(
-                        self.gene_summary[gene] + f' Expressed in {self.index2cell[cell]}. ' + self.ontology[self.index2cell[cell]])
+                        concat_gene_celltype(gene_string=self.gene_summary[gene],
+                                             cell_string=self.ontology[self.index2cell[cell]],
+                                             gene_name=None,
+                                             cell_name=self.index2cell[cell]))
                     key = self.token_dictionary[gene] if not use_names else gene
                     if tokenized:
                         gene_summariers[key] = self.text_tokenizer(
@@ -214,11 +240,58 @@ class LLM4Bio_data(LightningDataModule):
             result['cell'] = cell_summaries
         return result
 
-    def build_summary_table(self, tokenized_gene_summary: dict):
-        self.summary_table = {}
-        model = AutoModel.from_pretrained('michiyasunaga/BioLinkBERT-base')
-        with torch.no_grad():
-            for gene in tqdm(tokenized_gene_summary.keys(), desc="Building summary table"):
-                self.summary_table[gene] = model(
-                    **tokenized_gene_summary[gene]).last_hidden_state.mean(dim=1)[0]
-            self.summary_table[0] = torch.zeros(768)
+    def _get_summaries_for_collator(self, mode, encode_using_bert):
+        print('preparing summaries for collator')
+        if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
+            raise ValueError(f'mode {mode} is not defined!')
+        if not 'bert' in self.config['text_model'].lower() and encode_using_bert:
+            raise Exception('The text model should be a bert model')
+
+        if encode_using_bert:
+            # we want both celltype and gene summary tables
+            summaries = self.get_summaries(
+                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False)
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            model = AutoModel.from_pretrained(
+                'michiyasunaga/'+self.config['text_model']).to(device)
+        else:
+            summaries = self.get_summaries(
+                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False)
+
+        gene_summary, cell_summary = summaries['gene'], summaries['cell']
+        cell_result, gene_result = {}, {}
+        if not encode_using_bert:
+            cell_result = cell_summary
+            if 'concat' in mode:
+                gene_summary, cells = gene_summary
+                for gene in gene_summary.keys():
+                    gene_result[gene] = {}
+                    for cell, summary in zip(cells, gene_summary[gene]):
+                        gene_result[gene][cell] = summary
+                gene_result[0] = {cell: '' for cell in cells}
+            else:
+                gene_result = gene_summary
+                gene_result[0] = ''
+            return gene_result, cell_result
+        else:
+            with torch.no_grad():
+                for key in cell_summary.keys():
+                    cell_result[key] = model.forward(
+                        **cell_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
+            if 'gene' in mode:
+                with torch.no_grad():
+                    for key in tqdm(gene_summary.keys()):
+                        gene_result[key] = model.forward(
+                            **gene_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
+                gene_result[0] = np.zeros(768)
+            elif 'concat' in mode:
+                gene_summary, cells = gene_summary
+                for gene in tqdm(gene_summary.keys()):
+                    with torch.no_grad():
+                        gene_result[gene] = {}
+                        out = model.forward(
+                            **gene_summary[gene].to(device)).last_hidden_state.detach().cpu().numpy()
+                        for i, cell in enumerate(cells):
+                            gene_result[gene][cell] = out[i][0]
+                gene_result[0] = {cell: np.zeros(768) for cell in cells}
+            return gene_result, cell_result
