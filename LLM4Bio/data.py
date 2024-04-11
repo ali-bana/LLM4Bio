@@ -15,6 +15,8 @@ import numpy as np
 from .utils import remove_provided_by, concat_gene_celltype
 from transformers import BatchEncoding
 from .collator import LLM4BioDataCollator
+np.random.seed(42)
+torch.manual_seed(42)
 
 
 class LLM4Bio_data(LightningDataModule):
@@ -111,6 +113,7 @@ class LLM4Bio_data(LightningDataModule):
 
         print('train adata:\n', train_adata)
         print('test_adata:\n', test_adata)
+
         train_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         test_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         self.index2cell = {v: k for k, v in self.cell2index.items()}
@@ -160,7 +163,7 @@ class LLM4Bio_data(LightningDataModule):
             tokenizer=precollator, mlm=False)
 
         summaries_gene, summaries_cells = self._get_summaries_for_collator(
-            self.config['loss_type'], self.config['use_bert_encoded'])
+            self.config['loss_type'], self.config['use_bert_encoded'], concat_option=self.config['concat_option'])
         self.train_collator = LLM4BioDataCollator(mode=self.config['loss_type'],
                                                   return_encoded=self.config['use_bert_encoded'],
                                                   gene_collator=gene_collator,
@@ -194,7 +197,7 @@ class LLM4Bio_data(LightningDataModule):
                           batch_size=self.batch_size,
                           collate_fn=self.test_val_collator)
 
-    def get_summaries(self, mode, tokenized=True, use_names=False):
+    def get_summaries(self, mode, tokenized=True, use_names=False, concat_option=0):
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
             raise ValueError(f'mode {mode} is not defined!')
         result = {}
@@ -217,7 +220,8 @@ class LLM4Bio_data(LightningDataModule):
                         concat_gene_celltype(gene_string=self.gene_summary[gene],
                                              cell_string=self.ontology[self.index2cell[cell]],
                                              gene_name=None,
-                                             cell_name=self.index2cell[cell]))
+                                             cell_name=self.index2cell[cell],
+                                             concat_option=concat_option))
                     key = self.token_dictionary[gene] if not use_names else gene
                     if tokenized:
                         gene_summariers[key] = self.text_tokenizer(
@@ -240,7 +244,7 @@ class LLM4Bio_data(LightningDataModule):
             result['cell'] = cell_summaries
         return result
 
-    def _get_summaries_for_collator(self, mode, encode_using_bert):
+    def _get_summaries_for_collator(self, mode, encode_using_bert, concat_option=0):
         print('preparing summaries for collator')
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
             raise ValueError(f'mode {mode} is not defined!')
@@ -250,13 +254,13 @@ class LLM4Bio_data(LightningDataModule):
         if encode_using_bert:
             # we want both celltype and gene summary tables
             summaries = self.get_summaries(
-                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False)
+                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False, concat_option=concat_option)
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             model = AutoModel.from_pretrained(
                 'michiyasunaga/'+self.config['text_model']).to(device)
         else:
             summaries = self.get_summaries(
-                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False)
+                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False, concat_option=concat_option)
 
         gene_summary, cell_summary = summaries['gene'], summaries['cell']
         cell_result, gene_result = {}, {}
@@ -272,7 +276,6 @@ class LLM4Bio_data(LightningDataModule):
             else:
                 gene_result = gene_summary
                 gene_result[0] = ''
-            return gene_result, cell_result
         else:
             with torch.no_grad():
                 for key in cell_summary.keys():
@@ -294,4 +297,6 @@ class LLM4Bio_data(LightningDataModule):
                         for i, cell in enumerate(cells):
                             gene_result[gene][cell] = out[i][0]
                 gene_result[0] = {cell: np.zeros(768) for cell in cells}
-            return gene_result, cell_result
+
+        del gene_summary, cell_summary
+        return gene_result, cell_result

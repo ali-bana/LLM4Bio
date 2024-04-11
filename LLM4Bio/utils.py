@@ -11,8 +11,13 @@ def remove_provided_by(string):
     return re.sub(r'\[provided by .*?\]', '', string)
 
 
-def concat_gene_celltype(gene_string, cell_string, gene_name, cell_name):
-    return gene_string + f'Expressed in {cell_name} cell.' + cell_string
+def concat_gene_celltype(gene_string, cell_string, gene_name, cell_name, concat_option=0):
+    if concat_option == 0:
+        return gene_string + f'Expressed in {cell_name} cell.' + cell_string
+    elif concat_option == 1:
+        return gene_string + f'This gene is expressed in {cell_name} cell.' + cell_string
+    elif concat_option == 2:
+        return gene_string + f'Based on information from other genes, this is a {cell_name} cell.' + cell_string
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
@@ -72,6 +77,18 @@ def clip(gene_emb, text_emb, temperature=1.0):
     targets = torch.arange(logits.shape[0]).to(logits.device)
     tl = F.cross_entropy(logits, targets)
     gl = F.cross_entropy(logits.T, targets)
+    loss = ((tl + gl) / (2.0))
+    return {'loss': loss, 'text_loss': tl, 'gene_loss': gl}
+
+
+def new_clip(gene_emb, text_emb, temperature=1.0):
+    logits = (text_emb @ torch.transpose(gene_emb, -2, -1)) / temperature
+    if len(logits.shape) == 2:
+        logits = logits.unsqueeze(0)
+    targets = torch.arange(
+        logits.shape[1], device=logits.device).repeat(logits.shape[0], 1)
+    gl = F.cross_entropy(logits, targets)
+    tl = F.cross_entropy(torch.transpose(logits, -2, -1), targets)
     loss = ((tl + gl) / (2.0))
     return {'loss': loss, 'text_loss': tl, 'gene_loss': gl}
 

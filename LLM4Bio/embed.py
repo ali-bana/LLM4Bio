@@ -96,6 +96,7 @@ class Embedder:
         for batch in tqdm(dataloader):
             with torch.no_grad():
                 out = model.forward(batch.to(model.device))
+            batch = batch['gene']
             length = batch['length']
             gene_encs = out['gene_enc']
             text_encs = out['text_enc']

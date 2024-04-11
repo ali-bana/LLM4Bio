@@ -7,7 +7,7 @@ from .utils import trunc_normal_
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-from .utils import clip
+from .utils import clip, new_clip
 
 
 class TextEncoder(nn.Module):
@@ -22,7 +22,7 @@ class TextEncoder(nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
         self.projector = DINOHead(
-            llm_emb_dim, config['emb_dim'], nlayers=config['dino_nlayers'])
+            llm_emb_dim, config['emb_dim'], nlayers=config['dino_nlayers'], use_bn=config['use_bn'], use_dr=config['use_dr'], dr_rate=config['dr_rate'])
 
     def forward(self, inputs):
         return self.projection_forward(self.llm_forward(inputs)[:, 0, :])
@@ -57,7 +57,7 @@ class ProjectionHead(nn.Module):
 
 
 class DINOHead(nn.Module):
-    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+    def __init__(self, in_dim, out_dim, use_bn=False, use_dr=False, dr_rate=0.2, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
         super().__init__()
         nlayers = max(nlayers, 1)
         if nlayers == 1:
@@ -67,11 +67,15 @@ class DINOHead(nn.Module):
             if use_bn:
                 layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(nn.GELU())
+            if use_dr:
+                layers.append(nn.Dropout(dr_rate))
             for _ in range(nlayers - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 if use_bn:
                     layers.append(nn.BatchNorm1d(hidden_dim))
                 layers.append(nn.GELU())
+                if use_dr:
+                    layers.append(nn.Dropout(dr_rate))
             layers.append(nn.Linear(hidden_dim, bottleneck_dim))
             self.mlp = nn.Sequential(*layers)
         self.apply(self._init_weights)
@@ -104,7 +108,7 @@ class GeneEncoder(nn.Module):
                 param.requires_grad = False
         geneformer_dim = 256
         self.projector = DINOHead(
-            geneformer_dim, config['emb_dim'], nlayers=config['dino_nlayers'])
+            geneformer_dim, config['emb_dim'], nlayers=config['dino_nlayers'], use_bn=config['use_bn'], use_dr=config['use_dr'], dr_rate=config['dr_rate'])
 
     def gene_encoder_forward(self, inputs):
         input_ids = inputs['input_ids']
@@ -131,6 +135,7 @@ class TextGeneContrastive(LightningModule):
         self.lr = config['lr']
         self.mode = config['loss_type']
         self.encoded_input = config['use_bert_encoded']
+        self.flatten = config['flatten']
         self.config = config
 
     def encode_summaries(self, tokenized_summaries, dict_key='gene'):
@@ -140,7 +145,7 @@ class TextGeneContrastive(LightningModule):
             with torch.no_grad():
                 for key in tokenized_summaries.keys():
                     result[key] = self.text_encoder.forward(
-                        tokenized_summaries[key].to(self.text_encoder.model.device))[0][0].detach().cpu().numpy()
+                        tokenized_summaries[key].to(self.text_encoder.model.device))[0].detach().cpu().numpy()
 
         else:
             with torch.no_grad():
@@ -151,7 +156,7 @@ class TextGeneContrastive(LightningModule):
                     out = self.text_encoder.forward(
                         summaries[gene].to(self.text_encoder.model.device))
                     for i, cell in enumerate(cells):
-                        result[cell][gene] = out[i][0].detach().cpu().numpy()
+                        result[cell][gene] = out[i].detach().cpu().numpy()
                     del out
         return result
 
@@ -203,19 +208,37 @@ class TextGeneContrastive(LightningModule):
         loss = 0
         inputs = inputs['gene']
         length = inputs['length']
-        for i in range(inputs['input_ids'].shape[0]):
-            text_embedding = outputs['text_enc'][i, :length[i]]
-            gene_embedding = outputs['gene_enc'][i, :length[i]]
-            cell_loss = clip(gene_embedding, text_embedding, self.temperature)
-            loss += cell_loss['loss']
-            text_loss += cell_loss['text_loss']
-            gene_loss += cell_loss['gene_loss']
+        if self.flatten:
+            text_embedding = outputs['text_enc'].flatten(
+                start_dim=0, end_dim=1)
+            gene_embedding = outputs['gene_enc'].flatten(
+                start_dim=0, end_dim=1)
+            input_ids = inputs['input_ids'].flatten(start_dim=0, end_dim=1)
+            text_embedding = text_embedding[input_ids != 0, :]
+            gene_embedding = gene_embedding[input_ids != 0, :]
+            l = clip(gene_embedding, text_embedding, self.temperature)
+            gene_loss = l['gene_loss']
+            text_loss = l['text_loss']
+            loss = l['loss']
+        else:
+            for i in range(inputs['input_ids'].shape[0]):
+                text_embedding = outputs['text_enc'][i, :length[i]]
+                gene_embedding = outputs['gene_enc'][i, :length[i]]
+                cell_loss = clip(
+                    gene_embedding, text_embedding, self.temperature)
+                loss += cell_loss['loss']
+                text_loss += cell_loss['text_loss']
+                gene_loss += cell_loss['gene_loss']
+            gene_loss /= inputs['input_ids'].shape[0]
+            text_loss /= inputs['input_ids'].shape[0]
+            loss /= inputs['input_ids'].shape[0]
         if 'celltype' in self.mode:
             cell_loss = clip(outputs['cell_enc'],
                              outputs['cell_text_enc'], self.temperature)
             loss += cell_loss['loss']
             text_loss += cell_loss['text_loss']
             gene_loss += cell_loss['gene_loss']
+
         return {'gene_loss': gene_loss, 'text_loss': text_loss, 'loss': loss}
 
     def training_step(self, batch, batch_idx):
@@ -243,4 +266,15 @@ class TextGeneContrastive(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
+        if self.config['lr_schedule']:
+            def lr_lambda(epoch: int):
+                if epoch < 5:
+                    return 1
+                elif epoch < 10:
+                    return 0.5
+                elif epoch < 20:
+                    return 0.1
+                return 0.01
+            scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=lr_lambda, last_epoch=-1)
+        return {'optimizer': optimizer, 'lr_scheduler': scheduler}

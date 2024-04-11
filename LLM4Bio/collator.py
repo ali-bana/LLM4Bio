@@ -84,9 +84,9 @@ class LLM4BioDataCollator:
                         [self.summary_dict_gene[gene.item()][celltype.item()] for gene in gene_seq])
                 cell_summaries.append(self.summary_dict_cell[celltype.item()])
             collated_batch['text']['gene_bert_encoded'] = torch.tensor(
-                gene_summaries, device=collated_batch['gene']['input_ids'].device, dtype=torch.float32)
+                np.array(gene_summaries), device=collated_batch['gene']['input_ids'].device, dtype=torch.float32)
             collated_batch['text']['cell_bert_encoded'] = torch.tensor(
-                cell_summaries, device=collated_batch['gene']['input_ids'].device, dtype=torch.float32)
+                np.array(cell_summaries), device=collated_batch['gene']['input_ids'].device, dtype=torch.float32)
         else:
             for gene_seq, celltype in zip(collated_batch['gene']['input_ids'], collated_batch['gene']['cell_type']):
                 gs = []

@@ -20,20 +20,29 @@ hold_out_genes = ['GP6', 'PASK', 'PTGS1', 'TXK', 'DUSP2', 'COL19A1', 'SERPING1',
                   'GAS6', 'CD8B'] + ['S100A8', 'GNLY', 'NKG7', 'MS4A1', 'CD8A']
 hold_out_celltypes = ['Erythrocytes',
                       'Plasmacytoid dendritic cells', 'CD10+ B cells']
+
+hold_out_genes = []
+hold_out_celltypes = []
 config = {
-    'emb_dim': 1024,
+    'emb_dim': 256,
     'freeze_text_model': True,
     'freeze_gene_model': True,
-    'use_cell_type': True,
+    'use_cell_type': False,
     # 'concat_celltype', 'gene_celltype', 'concat', 'gene'
-    'loss_type': 'gene_celltype',
-    'lr': 1e-3,
+    'loss_type': 'concat',
+    'flatten': True,  # flattens cells and then compute clip
+    'lr': 1e-2,
+    'lr_schedule': True,
+    'concat_option': 2,
     'batch_size': 16,
     'n_top_genes': 7,
+    'use_bn': False,
+    'use_dr': True,
+    'dr_rate': 0.2,
     'leave_out_celltypes': hold_out_celltypes,
     'leave_out_genes': hold_out_genes,
     'text_agumentations': [],
-    'temperature': 1.0,
+    'temperature': 0.01,
     'dino_nlayers': 3,
     'data_dir': data_dir,
     'save_dir': save_dir,
