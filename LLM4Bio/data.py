@@ -15,6 +15,7 @@ import numpy as np
 from .utils import remove_provided_by, concat_gene_celltype
 from transformers import BatchEncoding
 from .collator import LLM4BioDataCollator
+import json
 np.random.seed(42)
 torch.manual_seed(42)
 
@@ -33,6 +34,8 @@ class LLM4Bio_data(LightningDataModule):
         if 'biolinkbert' in config['text_model'].lower():
             self.text_tokenizer = AutoTokenizer.from_pretrained(
                 'michiyasunaga/'+config['text_model'])
+        else:
+            self.text_tokenizer = None
         token_dictionary_path = './LLM4Bio/Geneformer/token_dictionary.pkl'
         with open(token_dictionary_path, 'rb') as f:
             self.token_dictionary = pickle.load(f)
@@ -200,103 +203,163 @@ class LLM4Bio_data(LightningDataModule):
     def get_summaries(self, mode, tokenized=True, use_names=False, concat_option=0):
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
             raise ValueError(f'mode {mode} is not defined!')
-        result = {}
-        gene_summariers = {}
-        if 'gene' in mode:
-            for gene in self.available_genes:
-                key = self.token_dictionary[gene] if not use_names else gene
-                if tokenized:
-                    gene_summariers[key] = self.text_tokenizer(
-                        self.gene_summary[gene], return_tensors="pt")
-                else:
-                    gene_summariers[key] = self.gene_summary[gene]
-            result['gene'] = gene_summariers
-        elif 'concat' in mode:
-            cells = [idx for idx in self.cell2index.values()]
-            for gene in self.available_genes:
-                sentences = []
-                for cell in cells:
-                    sentences.append(
-                        concat_gene_celltype(gene_string=self.gene_summary[gene],
-                                             cell_string=self.ontology[self.index2cell[cell]],
-                                             gene_name=None,
-                                             cell_name=self.index2cell[cell],
-                                             concat_option=concat_option))
+        if 'biolinkbert' in self.config['text_model'].lower():
+            result = {}
+            gene_summariers = {}
+            if 'gene' in mode:
+                for gene in self.available_genes:
                     key = self.token_dictionary[gene] if not use_names else gene
                     if tokenized:
                         gene_summariers[key] = self.text_tokenizer(
-                            sentences, return_tensors="pt", padding=True, max_length=512, truncation=True)
+                            self.gene_summary[gene], return_tensors="pt")
                     else:
-                        gene_summariers[key] = sentences
-            if use_names:
-                cells = [self.index2cell[idx] for idx in cells]
-            result['gene'] = (gene_summariers, cells)
-        result['cell'] = {}
-        if 'celltype' in mode:
-            cell_summaries = {}
-            for cell in self.cell2index.keys():
-                key = cell if use_names else self.cell2index[cell]
-                if tokenized:
-                    cell_summaries[key] = self.text_tokenizer(
-                        self.ontology[cell], return_tensors="pt")
-                else:
-                    cell_summaries[key] = self.ontology[cell]
-            result['cell'] = cell_summaries
-        return result
+                        gene_summariers[key] = self.gene_summary[gene]
+                result['gene'] = gene_summariers
+            elif 'concat' in mode:
+                cells = [idx for idx in self.cell2index.values()]
+                for gene in self.available_genes:
+                    sentences = []
+                    for cell in cells:
+                        sentences.append(
+                            concat_gene_celltype(gene_string=self.gene_summary[gene],
+                                                 cell_string=self.ontology[self.index2cell[cell]],
+                                                 gene_name=None,
+                                                 cell_name=self.index2cell[cell],
+                                                 concat_option=concat_option))
+                        key = self.token_dictionary[gene] if not use_names else gene
+                        if tokenized:
+                            gene_summariers[key] = self.text_tokenizer(
+                                sentences, return_tensors="pt", padding=True, max_length=512, truncation=True)
+                        else:
+                            gene_summariers[key] = sentences
+                if use_names:
+                    cells = [self.index2cell[idx] for idx in cells]
+                result['gene'] = (gene_summariers, cells)
+            result['cell'] = {}
+            if 'celltype' in mode:
+                cell_summaries = {}
+                for cell in self.cell2index.keys():
+                    key = cell if use_names else self.cell2index[cell]
+                    if tokenized:
+                        cell_summaries[key] = self.text_tokenizer(
+                            self.ontology[cell], return_tensors="pt")
+                    else:
+                        cell_summaries[key] = self.ontology[cell]
+                result['cell'] = cell_summaries
+            return result
+
+        elif self.config['text_model'] == 'text-embedding-3-small':
+            if 'gene' in mode:
+                with open('./data/PBMC/NCBI_gene_summary_embedding.json', 'r') as f:
+                    gene_summary_encoded = json.load(
+                        f)['text-embedding-3-small']
+            elif 'concat' in mode:
+                with open('./data/PBMC/concat_embedding.json', 'r') as f:
+                    gene_summary_encoded = json.load(
+                        f)['text-embedding-3-small']
+            with open('data/PBMC/cell_onto_embedding.json', 'r') as f:
+                cell_summary_encoded = json.load(f)['text-embedding-3-small']
+            result = {'gene': {}, 'cell': {}}
+            if 'gene' in mode:
+                for gene in self.available_genes:
+                    key = self.token_dictionary[gene] if not use_names else gene
+                    result['gene'][key] = torch.tensor(
+                        gene_summary_encoded[gene], dtype=torch.float32)
+            elif 'concat' in mode:
+                cells = [idx for idx in self.cell2index.keys()]
+                gene_summariers = {}
+                for gene in self.available_genes:
+                    sentences = []
+                    for cell in cells:
+                        sentences.append(gene_summary_encoded[gene][cell])
+                        key = self.token_dictionary[gene] if not use_names else gene
+                        gene_summariers[key] = torch.tensor(
+                            sentences, dtype=torch.float32)
+                if not use_names:
+                    cells = [self.cell2index[c] for c in cells]
+                result['gene'] = (gene_summariers, cells)
+            result['cell'] = {}
+            if 'celltype' in mode:
+                for cell in self.cell2index.keys():
+                    key = cell if use_names else self.cell2index[cell]
+                    result['cell'][key] = torch.tensor(
+                        cell_summary_encoded[cell], dtype=torch.float32)
+            return result
 
     def _get_summaries_for_collator(self, mode, encode_using_bert, concat_option=0):
-        print('preparing summaries for collator')
-        if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
-            raise ValueError(f'mode {mode} is not defined!')
-        if not 'bert' in self.config['text_model'].lower() and encode_using_bert:
-            raise Exception('The text model should be a bert model')
+        if 'biolinkbert' in self.config['text_model'].lower():
+            print('preparing summaries for collator')
+            if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
+                raise ValueError(f'mode {mode} is not defined!')
+            if not 'bert' in self.config['text_model'].lower() and encode_using_bert:
+                raise Exception('The text model should be a bert model')
 
-        if encode_using_bert:
-            # we want both celltype and gene summary tables
-            summaries = self.get_summaries(
-                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False, concat_option=concat_option)
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            model = AutoModel.from_pretrained(
-                'michiyasunaga/'+self.config['text_model']).to(device)
-        else:
-            summaries = self.get_summaries(
-                'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False, concat_option=concat_option)
-
-        gene_summary, cell_summary = summaries['gene'], summaries['cell']
-        cell_result, gene_result = {}, {}
-        if not encode_using_bert:
-            cell_result = cell_summary
-            if 'concat' in mode:
-                gene_summary, cells = gene_summary
-                for gene in gene_summary.keys():
-                    gene_result[gene] = {}
-                    for cell, summary in zip(cells, gene_summary[gene]):
-                        gene_result[gene][cell] = summary
-                gene_result[0] = {cell: '' for cell in cells}
+            if encode_using_bert:
+                # we want both celltype and gene summary tables
+                summaries = self.get_summaries(
+                    'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False, concat_option=concat_option)
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                model = AutoModel.from_pretrained(
+                    'michiyasunaga/'+self.config['text_model']).to(device)
             else:
-                gene_result = gene_summary
-                gene_result[0] = ''
-        else:
-            with torch.no_grad():
-                for key in cell_summary.keys():
-                    cell_result[key] = model.forward(
-                        **cell_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
-            if 'gene' in mode:
-                with torch.no_grad():
-                    for key in tqdm(gene_summary.keys()):
-                        gene_result[key] = model.forward(
-                            **gene_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
-                gene_result[0] = np.zeros(768)
-            elif 'concat' in mode:
-                gene_summary, cells = gene_summary
-                for gene in tqdm(gene_summary.keys()):
-                    with torch.no_grad():
-                        gene_result[gene] = {}
-                        out = model.forward(
-                            **gene_summary[gene].to(device)).last_hidden_state.detach().cpu().numpy()
-                        for i, cell in enumerate(cells):
-                            gene_result[gene][cell] = out[i][0]
-                gene_result[0] = {cell: np.zeros(768) for cell in cells}
+                summaries = self.get_summaries(
+                    'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False, concat_option=concat_option)
 
-        del gene_summary, cell_summary
-        return gene_result, cell_result
+            gene_summary, cell_summary = summaries['gene'], summaries['cell']
+            cell_result, gene_result = {}, {}
+            if not encode_using_bert:
+                cell_result = cell_summary
+                if 'concat' in mode:
+                    gene_summary, cells = gene_summary
+                    for gene in gene_summary.keys():
+                        gene_result[gene] = {}
+                        for cell, summary in zip(cells, gene_summary[gene]):
+                            gene_result[gene][cell] = summary
+                    gene_result[0] = {cell: '' for cell in cells}
+                else:
+                    gene_result = gene_summary
+                    gene_result[0] = ''
+            else:
+                with torch.no_grad():
+                    for key in cell_summary.keys():
+                        cell_result[key] = model.forward(
+                            **cell_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
+                if 'gene' in mode:
+                    with torch.no_grad():
+                        for key in tqdm(gene_summary.keys()):
+                            gene_result[key] = model.forward(
+                                **gene_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
+                    gene_result[0] = np.zeros(768)
+                elif 'concat' in mode:
+                    gene_summary, cells = gene_summary
+                    for gene in tqdm(gene_summary.keys()):
+                        with torch.no_grad():
+                            gene_result[gene] = {}
+                            out = model.forward(
+                                **gene_summary[gene].to(device)).last_hidden_state.detach().cpu().numpy()
+                            for i, cell in enumerate(cells):
+                                gene_result[gene][cell] = out[i][0]
+                    gene_result[0] = {cell: np.zeros(768) for cell in cells}
+
+            del gene_summary, cell_summary
+            return gene_result, cell_result
+        elif self.config['text_model'] == 'text-embedding-3-small':
+            if 'gene' in mode:
+                with open('./data/PBMC/NCBI_gene_summary_embedding.json', 'r') as f:
+                    gene_summary = json.load(f)['text-embedding-3-small']
+                    gene_summary = {self.token_dictionary[k]: np.array(v)
+                                    for k, v in gene_summary.items() if k in self.available_genes}
+                    gene_summary[0] = np.zeros(1536)
+            elif 'concat' in mode:
+                with open('./data/PBMC/concat_embedding.json', 'r') as f:
+                    gene_summary = {self.token_dictionary[k]: v for k, v in json.load(
+                        f)['text-embedding-3-small'].items() if k in self.available_genes}
+                    for gene in gene_summary.keys():
+                        gene_summary[gene] = {self.cell2index[k]: np.array(v)
+                                              for k, v in gene_summary[gene].items()}
+                    gene_summary[0] = {k: np.zeros(1536)
+                                       for k in self.index2cell.keys()}
+            with open('data/PBMC/cell_onto_embedding.json', 'r') as f:
+                cell_summary = {self.cell2index[k]: v for k, v in json.load(
+                    f)['text-embedding-3-small'].items()}
+            return gene_summary, cell_summary

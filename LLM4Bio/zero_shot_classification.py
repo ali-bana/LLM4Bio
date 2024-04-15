@@ -75,6 +75,10 @@ from transformers import AutoTokenizer
 #         return np.concatenate(true_classes), np.concatenate(pred_classes)
 
 
+# concat, gene_embedding %90
+# cell_type text, cell_embedding = mean(gene_embedding) => %79
+
+
 def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gene=200):
     if not mode in ['gene', 'cell', 'concat']:
         raise ValueError('mode must be "gene", "cell" or "gene_cell"')
@@ -95,7 +99,7 @@ def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gen
 
         cell_types_labels, genes_labels, embedded_labels = np.array(
             cell_types), np.array(genes), np.stack(el)
-
+        # embedding = [N, ]
         logits = embeddings @ embedded_labels.T
         if return_all:
             return cell_types_labels[np.argsort(logits, axis=1)], genes_labels[np.argsort(logits, axis=1)][:, max(max_gene, logits.shape[1])]

@@ -13,12 +13,15 @@ from .utils import clip, new_clip
 class TextEncoder(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
-
+        self.text_model = config['text_model']
         if 'biolinkbert' in config['text_model'].lower():
             self.model = AutoModel.from_pretrained(
                 'michiyasunaga/'+config['text_model'])
             llm_emb_dim = 768
-        if config['freeze_text_model']:
+        elif config['text_model'] == 'text-embedding-3-small':
+            self.model = None
+            llm_emb_dim = 1536
+        if config['freeze_text_model'] and not self.model is None:
             for param in self.model.parameters():
                 param.requires_grad = False
         self.projector = DINOHead(
@@ -28,7 +31,11 @@ class TextEncoder(nn.Module):
         return self.projection_forward(self.llm_forward(inputs)[:, 0, :])
 
     def llm_forward(self, inputs):
-        return self.model(**inputs).last_hidden_state
+        if self.model == 'text-embedding-3-small':
+            raise NotImplementedError(
+                f'Forward for {self.model} is not implemented yet.')
+        else:
+            return self.model(**inputs).last_hidden_state
 
     def projection_forward(self, inputs):
         return self.projector.forward(inputs)
@@ -138,23 +145,30 @@ class TextGeneContrastive(LightningModule):
         self.flatten = config['flatten']
         self.config = config
 
-    def encode_summaries(self, tokenized_summaries, dict_key='gene'):
+    def encode_summaries(self, tokenized_summaries, dict_key='gene', only_head=False):
         result = {}
         tokenized_summaries = tokenized_summaries[dict_key]
         if isinstance(tokenized_summaries, dict):
             with torch.no_grad():
                 for key in tokenized_summaries.keys():
-                    result[key] = self.text_encoder.forward(
-                        tokenized_summaries[key].to(self.text_encoder.model.device))[0].detach().cpu().numpy()
-
+                    if only_head:
+                        result[key] = self.text_encoder.projection_forward(
+                            tokenized_summaries[key].to(self.device)).detach().cpu().numpy()
+                    else:
+                        result[key] = self.text_encoder.forward(
+                            tokenized_summaries[key].to(self.device))[0].detach().cpu().numpy()
         else:
             with torch.no_grad():
                 summaries, cells = tokenized_summaries
                 for cell in cells:
                     result[cell] = dict()
                 for gene in tqdm(summaries.keys(), desc="Encoding Sumaries"):
-                    out = self.text_encoder.forward(
-                        summaries[gene].to(self.text_encoder.model.device))
+                    if only_head:
+                        out = self.text_encoder.projection_forward(
+                            summaries[gene].to(self.device))
+                    else:
+                        out = self.text_encoder.forward(
+                            summaries[gene].to(self.device))
                     for i, cell in enumerate(cells):
                         result[cell][gene] = out[i].detach().cpu().numpy()
                     del out

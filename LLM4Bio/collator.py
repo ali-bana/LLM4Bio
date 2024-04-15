@@ -51,6 +51,9 @@ class LLM4BioDataCollator:
         self.agumentations = aguments
         self.agument = False if aguments is None or len(
             aguments) == 0 else True
+        if not return_encoded and text_tokenizer is None:
+            raise ValueError(
+                'text_tokenizer must be provided if return_encoded is False')
 
     def __call__(self, batch):
         """Given a batch of data, it collates the data into a single batch

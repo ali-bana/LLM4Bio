@@ -46,7 +46,8 @@ config = {
     'dino_nlayers': 3,
     'data_dir': data_dir,
     'save_dir': save_dir,
-    'text_model': 'BioLinkBERT-base',
+    # BioLinkBERT-base, BioLinkBERT-large, text-embedding-3-small
+    'text_model': 'text-embedding-3-small',
     'gene_model': 'geneformer',
     'gene_dataset': 'PBMC',
     'gene_summary': 'NCBI',
@@ -55,7 +56,7 @@ config = {
 config['use_bert_encoded'] = True if len(
     config['text_agumentations']) == 0 and config['freeze_text_model'] else False
 # config['use_bert_encoded'] = False
-# config['use_bert_encoded'] = True
+config['use_bert_encoded'] = True
 
 dataset = LLM4Bio_data(config)
 
@@ -66,9 +67,29 @@ dataset.setup('')
 model = TextGeneContrastive(config)
 
 
-trainer = Trainer(max_epochs=50)
+trainer = Trainer(max_epochs=1)
 trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
             val_dataloaders=dataset.val_dataloader())
+
+encoded_summaries = model.encode_summaries(
+    dataset.get_summaries('concat_celltype', use_names=True), dict_key='gene', only_head=True)
+
+for k, v in encoded_summaries.items():
+    for k2, v2 in v.items():
+        print(k, k2, v2.shape)
+print('-----------------')
+encoded_summaries = model.encode_summaries(
+    dataset.get_summaries('gene_celltype', use_names=True), dict_key='gene', only_head=True)
+
+for k, v in encoded_summaries.items():
+    print(k, v.shape)
+print('-------------------')
+encoded_summaries = model.encode_summaries(
+    dataset.get_summaries('gene_celltype', use_names=True), dict_key='cell', only_head=True)
+
+for k, v in encoded_summaries.items():
+    print(k, v.shape)
+
 
 # embedder = Embedder(dataset.token_dictionary,
 #                     dataset.cell2index,
