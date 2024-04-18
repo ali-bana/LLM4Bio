@@ -11,12 +11,19 @@ def remove_provided_by(string):
     return re.sub(r'\[provided by .*?\]', '', string)
 
 
-def concat_gene_celltype(gene_string, cell_string, gene_name, cell_name, concat_option=0):
+def concat_gene_celltype(gene_string, cell_string, gene_name, cell_name, concat_option=0, tissue_name='', gene_markers=None):
     if concat_option == 0:
-        return gene_string + f'Expressed in {cell_name} cell.' + cell_string
+        if gene_markers is None:
+            raise ValueError(
+                'gene_markers shouldn ot be None for concat_option 0')
+        return f"Here is a an embedding of gene {gene_name}.{gene_string} Belongs to a cell that come from tissue {tissue_name} and cell type {cell_name}. {cell_string}. and gene markers for this cell type are {', '.join(gene_markers)}."
     elif concat_option == 1:
-        return gene_string + f'This gene is expressed in {cell_name} cell.' + cell_string
+        raise NotImplementedError('concat_option 1 is not implemented')
     elif concat_option == 2:
+        return gene_string + f'Expressed in {cell_name} cell.' + cell_string
+    elif concat_option == 3:
+        return gene_string + f'This gene is expressed in {cell_name} cell.' + cell_string
+    elif concat_option == 4:
         return gene_string + f'Based on information from other genes, this is a {cell_name} cell.' + cell_string
 
 

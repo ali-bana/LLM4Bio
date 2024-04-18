@@ -1,3 +1,4 @@
+import anndata as ad
 from lightning import LightningDataModule
 import os
 import gdown
@@ -61,6 +62,7 @@ class LLM4Bio_data(LightningDataModule):
         hgnc2ensmbl_url = 'https://drive.google.com/uc?export=download&id=1s9K_tV2f_n6zONtUt6_lTQY_9FYhvZfm'
         hgnc2ensmbl_path = os.path.join(
             self.data_dir, 'hgnc2ensembl.txt')
+        kang_path = os.path.join(self.data_dir, 'kang_tutorial.h5ad')
         if not os.path.exists(adata_path):
             gdown.download(adata_url, adata_path, quiet=False)
         if not os.path.exists(gene_summary_path):
@@ -81,6 +83,12 @@ class LLM4Bio_data(LightningDataModule):
             self.gene_summary[gene] = remove_provided_by(
                 self.gene_summary[gene])
         adata = sc.read_h5ad(adata_path)
+        kang = sc.read_h5ad(kang_path)
+        kang.obs['study'] = 'Kang'
+        test_adata = ad.concat(
+            [kang, adata[adata.obs['study'] == 'Oetjen', :].copy()], join='inner')
+        adata = adata[adata.obs['study'] != 'Oetjen', :].copy()
+        del kang
         loom_path_train = os.path.join(self.data_dir, 'loom', 'train')
         loom_path_test = os.path.join(self.data_dir, 'loom', 'test')
         if not os.path.exists(loom_path_test):
@@ -96,23 +104,28 @@ class LLM4Bio_data(LightningDataModule):
                 if self.gene2ensembl[i] in self.token_dictionary.keys() and self.gene2ensembl[i] in self.gene_summary.keys():
                     present_genes.append(i)
         adata._inplace_subset_var(present_genes)
+        test_adata._inplace_subset_var(present_genes)
         adata.obsm['n_counts'] = adata.X.sum(axis=1)
+        test_adata.obsm['n_counts'] = test_adata.X.sum(axis=1)
         adata.varm['ensembl_id'] = pd.Series(
             self.gene2ensembl, index=adata.var_names).values
+        test_adata.varm['ensembl_id'] = pd.Series(
+            self.gene2ensembl, index=test_adata.var_names).values
         self.cell2index = {item: i for i, item in enumerate(
-            adata.obs['cell_type'].unique())}
-        idxs = np.full(adata.shape[0], False)
-        idxs[np.random.choice(adata.shape[0], int(
-            adata.shape[0]*0.15), replace=False)] = True
-        if 'leave_out_celltypes' in self.config.keys() and len(self.config['leave_out_celltypes']) > 0:
-            leave_out = adata.obs['cell_type'].isin(
-                self.config['leave_out_celltypes'])
-            idxs = pd.Series(idxs, index=adata.obs.index) | leave_out
-        test_adata = adata[idxs].copy()
-        train_adata = adata[~idxs].copy()
-        if 'leave_out_genes' in self.config.keys() and len(self.config['leave_out_genes']) > 0:
-            train_adata = train_adata[:, ~train_adata.var_names.isin(
-                self.config['leave_out_genes'])].copy()
+            set(adata.obs['cell_type'].to_list()+test_adata.obs['cell_type'].to_list()))}
+        train_adata = adata
+        # idxs = np.full(adata.shape[0], False)
+        # idxs[np.random.choice(adata.shape[0], int(
+        #     adata.shape[0]*0.15), replace=False)] = True
+        # if 'leave_out_celltypes' in self.config.keys() and len(self.config['leave_out_celltypes']) > 0:
+        #     leave_out = adata.obs['cell_type'].isin(
+        #         self.config['leave_out_celltypes'])
+        #     idxs = pd.Series(idxs, index=adata.obs.index) | leave_out
+        # test_adata = adata[idxs].copy()
+        # train_adata = adata[~idxs].copy()
+        # if 'leave_out_genes' in self.config.keys() and len(self.config['leave_out_genes']) > 0:
+        #     train_adata = train_adata[:, ~train_adata.var_names.isin(
+        #         self.config['leave_out_genes'])].copy()
 
         print('train adata:\n', train_adata)
         print('test_adata:\n', test_adata)
@@ -124,7 +137,8 @@ class LLM4Bio_data(LightningDataModule):
             loom_path_test, 'pbmc_test.loom'), True)
         train_adata.write_loom(os.path.join(
             loom_path_train, 'pbmc_train.loom'), True)
-        tk = TranscriptomeTokenizer({"cell_type": "cell_type"}, nproc=16)
+        tk = TranscriptomeTokenizer(
+            {"cell_type": "cell_type", "study": "study"}, nproc=16)
         self.tokenized_path_train = os.path.join(
             self.data_dir, 'tokenized', 'train')
         self.tokenized_path_test = os.path.join(
@@ -167,20 +181,13 @@ class LLM4Bio_data(LightningDataModule):
 
         summaries_gene, summaries_cells = self._get_summaries_for_collator(
             self.config['loss_type'], self.config['use_bert_encoded'], concat_option=self.config['concat_option'])
-        self.train_collator = LLM4BioDataCollator(mode=self.config['loss_type'],
-                                                  return_encoded=self.config['use_bert_encoded'],
-                                                  gene_collator=gene_collator,
-                                                  text_tokenizer=self.text_tokenizer,
-                                                  summary_dict_gene=summaries_gene,
-                                                  summary_dict_cell=summaries_cells,
-                                                  aguments=self.config['text_agumentations'])
-        self.test_val_collator = LLM4BioDataCollator(mode=self.config['loss_type'],
-                                                     return_encoded=self.config['use_bert_encoded'],
-                                                     gene_collator=gene_collator,
-                                                     text_tokenizer=self.text_tokenizer,
-                                                     summary_dict_gene=summaries_gene,
-                                                     summary_dict_cell=summaries_cells,
-                                                     aguments=None)
+        self.collator = LLM4BioDataCollator(mode=self.config['loss_type'],
+                                            return_encoded=self.config['use_bert_encoded'],
+                                            gene_collator=gene_collator,
+                                            text_tokenizer=self.text_tokenizer,
+                                            summary_dict_gene=summaries_gene,
+                                            summary_dict_cell=summaries_cells,
+                                            aguments=None)
         # self.collator = DataCollatorForLanguageModeling(
         #     tokenizer=precollator, mlm=True)
 
