@@ -206,6 +206,8 @@ class TextGeneContrastive(LightningModule):
                     raise NotImplementedError(
                         'This part will be used in case colab cannot handle big data block. TB implemented.')
             gene_text_enc = torch.stack(gene_text_enc, dim=0)
+            gene_text_enc = F.normalize(gene_text_enc, p=2, dim=-1)
+            gene_enc = F.normalize(gene_enc, p=2, dim=-1)
             cell_text_enc = (gene_text_enc *
                              inputs_gene['attention_mask'][:, :, None]).sum(dim=1)
             cell_text_enc = cell_text_enc / inputs_gene['length'][:, None]

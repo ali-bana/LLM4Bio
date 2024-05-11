@@ -40,7 +40,7 @@ class EmbeddingContainer:
                          (self._cell_types[:] == cell_type.encode('utf-8')))[0]
         if len(index) > 0:
             print(
-                "Warning: Gene-cell type pair already exists. Overwriting existing values.")
+                f"Warning: Gene-cell type pair ({gene}, {cell_type}) already exists. Overwriting existing values.")
             index = index[0]
             self._embeddings[index] = embedding
             self._strings[index] = string.encode('utf-8')
@@ -62,6 +62,7 @@ class EmbeddingContainer:
         cell_type = '' if cell_type is None else cell_type
         index = np.where((self._genes[:] == gene.encode('utf-8')) &
                          (self._cell_types[:] == cell_type.encode('utf-8')))[0]
+
         if len(index) > 0:
             index = index[0]
             if return_string:
@@ -71,7 +72,7 @@ class EmbeddingContainer:
         else:
             return None
 
-    def get_all_embeddings_concat(self, type='gene'):
+    def get_all_embeddings(self, type='gene'):
         if not type in ['gene', 'cell', 'concat']:
             raise ValueError(
                 "Invalid type. Must be 'gene', 'cell' or 'concat'.")

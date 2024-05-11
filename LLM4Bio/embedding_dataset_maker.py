@@ -49,6 +49,7 @@ def make_dataset(
     embedding_container.open()
 
     try:
+        # embedding the concatenation
         encoding_batch = []
         total_string = ''
         for gene in tqdm(gene_summaries.keys()):
@@ -78,6 +79,53 @@ def make_dataset(
                     total_string = ''
                     encoding_batch.append((gene, cell, text))
                     total_string += '' + text
+
+        for gene in tqdm(gene_summaries.keys()):
+            text = f"This is the embedding for the gene {ensembl2gene[gene]}. {gene_summaries[gene]}"
+            if len(encoder.encode(total_string+'\n '+text)) < 7800:
+                encoding_batch.append((gene, None, text))
+                total_string += ' \n' + text
+            else:
+                encs = get_encoding([v for _, __, v in encoding_batch])
+                for i, item in enumerate(encoding_batch):
+                    embedding_container.add_embedding(
+                        gene=item[0],
+                        cell_type=item[1],
+                        embedding=encs[i],
+                        string=item[2]
+                    )
+                encoding_batch = []
+                total_string = ''
+                encoding_batch.append((gene, None, text))
+                total_string += '' + text
+
+        for cell in tqdm(cell_summaries.keys()):
+            text = f"This is the embedding for the cell {cell}. {cell_summaries[cell]}"
+            if len(encoder.encode(total_string+'\n '+text)) < 7800:
+                encoding_batch.append((None, cell, text))
+                total_string += ' \n' + text
+            else:
+                encs = get_encoding([v for _, __, v in encoding_batch])
+                for i, item in enumerate(encoding_batch):
+                    embedding_container.add_embedding(
+                        gene=item[0],
+                        cell_type=item[1],
+                        embedding=encs[i],
+                        string=item[2]
+                    )
+                encoding_batch = []
+                total_string = ''
+                encoding_batch.append((None, cell, text))
+                total_string += '' + text
+        if len(encoding_batch) > 0:
+            encs = get_encoding([v for _, __, v in encoding_batch])
+            for i, item in enumerate(encoding_batch):
+                embedding_container.add_embedding(
+                    gene=item[0],
+                    cell_type=item[1],
+                    embedding=encs[i],
+                    string=item[2]
+                )
         print('Embedding Finished Successfully')
     except Exception as e:
         print(e)

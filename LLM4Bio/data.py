@@ -17,6 +17,7 @@ from .utils import remove_provided_by, concat_gene_celltype
 from transformers import BatchEncoding
 from .collator import LLM4BioDataCollator
 import json
+from .container import EmbeddingContainer
 np.random.seed(42)
 torch.manual_seed(42)
 
@@ -96,6 +97,8 @@ class LLM4Bio_data(LightningDataModule):
         if not os.path.exists(loom_path_train):
             os.makedirs(loom_path_train)
         sc.pp.highly_variable_genes(adata, n_top_genes=self.n_top_genes)
+        adata.var.highly_variable = adata.var.highly_variable | adata.var.index.isin(
+            self.config['keep_genes'])
         adata = adata[:, adata.var.highly_variable]
         import pandas as pd
         present_genes = []
@@ -114,18 +117,6 @@ class LLM4Bio_data(LightningDataModule):
         self.cell2index = {item: i for i, item in enumerate(
             set(adata.obs['cell_type'].to_list()+test_adata.obs['cell_type'].to_list()))}
         train_adata = adata
-        # idxs = np.full(adata.shape[0], False)
-        # idxs[np.random.choice(adata.shape[0], int(
-        #     adata.shape[0]*0.15), replace=False)] = True
-        # if 'leave_out_celltypes' in self.config.keys() and len(self.config['leave_out_celltypes']) > 0:
-        #     leave_out = adata.obs['cell_type'].isin(
-        #         self.config['leave_out_celltypes'])
-        #     idxs = pd.Series(idxs, index=adata.obs.index) | leave_out
-        # test_adata = adata[idxs].copy()
-        # train_adata = adata[~idxs].copy()
-        # if 'leave_out_genes' in self.config.keys() and len(self.config['leave_out_genes']) > 0:
-        #     train_adata = train_adata[:, ~train_adata.var_names.isin(
-        #         self.config['leave_out_genes'])].copy()
 
         print('train adata:\n', train_adata)
         print('test_adata:\n', test_adata)
@@ -133,12 +124,13 @@ class LLM4Bio_data(LightningDataModule):
         train_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         test_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         self.index2cell = {v: k for k, v in self.cell2index.items()}
+
         test_adata.write_loom(os.path.join(
             loom_path_test, 'pbmc_test.loom'), True)
         train_adata.write_loom(os.path.join(
             loom_path_train, 'pbmc_train.loom'), True)
         tk = TranscriptomeTokenizer(
-            {"cell_type": "cell_type", "study": "study"}, nproc=16)
+            {"cell_type": "cell_type"}, nproc=16)
         self.tokenized_path_train = os.path.join(
             self.data_dir, 'tokenized', 'train')
         self.tokenized_path_test = os.path.join(
@@ -195,17 +187,17 @@ class LLM4Bio_data(LightningDataModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.batch_size,
                           shuffle=True,
-                          collate_fn=self.train_collator)
+                          collate_fn=self.collator)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.test_val_collator)
+                          collate_fn=self.collator)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.test_val_collator)
+                          collate_fn=self.collator)
 
     def get_summaries(self, mode, tokenized=True, use_names=False, concat_option=0):
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
@@ -351,22 +343,28 @@ class LLM4Bio_data(LightningDataModule):
             del gene_summary, cell_summary
             return gene_result, cell_result
         elif self.config['text_model'] == 'text-embedding-3-small':
-            if 'gene' in mode:
-                with open('./data/PBMC/NCBI_gene_summary_embedding.json', 'r') as f:
-                    gene_summary = json.load(f)['text-embedding-3-small']
-                    gene_summary = {self.token_dictionary[k]: np.array(v)
-                                    for k, v in gene_summary.items() if k in self.available_genes}
-                    gene_summary[0] = np.zeros(1536)
-            elif 'concat' in mode:
-                with open('./data/PBMC/concat_embedding.json', 'r') as f:
-                    gene_summary = {self.token_dictionary[k]: v for k, v in json.load(
-                        f)['text-embedding-3-small'].items() if k in self.available_genes}
-                    for gene in gene_summary.keys():
-                        gene_summary[gene] = {self.cell2index[k]: np.array(v)
-                                              for k, v in gene_summary[gene].items()}
-                    gene_summary[0] = {k: np.zeros(1536)
-                                       for k in self.index2cell.keys()}
-            with open('data/PBMC/cell_onto_embedding.json', 'r') as f:
-                cell_summary = {self.cell2index[k]: v for k, v in json.load(
-                    f)['text-embedding-3-small'].items()}
+            container = EmbeddingContainer(
+                os.path.join(self.config['text_embedding_dir'], 'embeddings.h5'), 1536)
+            container.open()
+            gene_summary = container.get_all_embeddings(
+                type='concat' if 'concat' in mode else 'gene')
+            cell_summary = container.get_all_embeddings(
+                type='cell')
+            cell_summary = {self.cell2index[k]
+                : v for k, v in cell_summary.items()}
+            gene_summary = {k: v for k, v in gene_summary.items(
+            ) if k in self.token_dictionary.keys()}
+            if 'concat' in mode:
+                gene_summary = {
+                    self.token_dictionary[k]: v for k, v in gene_summary.items()}
+                for gene in gene_summary.keys():
+                    gene_summary[gene] = {
+                        self.cell2index[k]: v for k, v in gene_summary[gene].items()}
+                gene_summary[0] = {k: np.zeros(1536)
+                                   for k in self.cell2index.values()}
+            elif 'gene' in mode:
+                gene_summary = {
+                    self.token_dictionary[k]: v for k, v in gene_summary.items()}
+                gene_summary[0] = np.zeros(1536)
+            container.close()
             return gene_summary, cell_summary

@@ -15,12 +15,18 @@ from LLM4Bio.zero_shot_classification import classify
 from sklearn import svm
 save_dir = './saves'
 data_dir = './data'
-hold_out_genes = ['GP6', 'PASK', 'PTGS1', 'TXK', 'DUSP2', 'COL19A1', 'SERPING1', 'DAB2', 'IFNG',
-                  'UGCG', 'BEND2', 'CD83', 'KIR3DL2', 'CDK12', 'MNDA', 'CEP78', 'CCDC50', 'PRDM1',
-                  'GAS6', 'CD8B'] + ['S100A8', 'GNLY', 'NKG7', 'MS4A1', 'CD8A']
-hold_out_celltypes = ['Erythrocytes',
-                      'Plasmacytoid dendritic cells', 'CD10+ B cells']
-
+# hold_out_genes = ['GP6', 'PASK', 'PTGS1', 'TXK', 'DUSP2', 'COL19A1', 'SERPING1', 'DAB2', 'IFNG',
+#                   'UGCG', 'BEND2', 'CD83', 'KIR3DL2', 'CDK12', 'MNDA', 'CEP78', 'CCDC50', 'PRDM1',
+#                   'GAS6', 'CD8B'] + ['S100A8', 'GNLY', 'NKG7', 'MS4A1', 'CD8A']
+# hold_out_celltypes = ['Erythrocytes',
+#                       'Plasmacytoid dendritic cells', 'CD10+ B cells']
+hold_out_genes = []
+hold_out_celltypes = []
+with open('data/openai_te3_embedding_all/all_markers.json', 'r') as f:
+    marker_genes = json.load(f)
+keep_genes = set()
+for key in marker_genes.keys():
+    keep_genes.update(marker_genes[key])
 hold_out_genes = []
 hold_out_celltypes = []
 config = {
@@ -41,13 +47,15 @@ config = {
     'dr_rate': 0.2,
     'leave_out_celltypes': hold_out_celltypes,
     'leave_out_genes': hold_out_genes,
+    'keep_genes': keep_genes,
+    'text_embedding_dir': './data/openai_te3_embedding_all',
     'text_agumentations': [],
     'temperature': 0.01,
     'dino_nlayers': 3,
     'data_dir': data_dir,
     'save_dir': save_dir,
     # BioLinkBERT-base, BioLinkBERT-large, text-embedding-3-small
-    'text_model': 'BioLinkBERT-base',
+    'text_model': 'text-embedding-3-small',
     'gene_model': 'geneformer',
     'gene_dataset': 'PBMC',
     'gene_summary': 'NCBI',
