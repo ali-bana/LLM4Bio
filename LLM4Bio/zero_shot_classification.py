@@ -102,7 +102,7 @@ def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gen
         # embedding = [N, ]
         logits = embeddings @ embedded_labels.T
         if return_all:
-            return cell_types_labels[np.argsort(logits, axis=1)], genes_labels[np.argsort(logits, axis=1)][:, max(max_gene, logits.shape[1])]
+            return cell_types_labels[np.argsort(logits, axis=1)], genes_labels[np.argsort(logits, axis=1)][:, min(max_gene, logits.shape[1])]
         return cell_types_labels[np.argmax(logits, axis=1)], genes_labels[np.argmax(logits, axis=1)]
 
     else:
@@ -117,5 +117,5 @@ def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gen
         labels, embedded_labels = np.array(l), np.stack(el)
         logits = embeddings @ embedded_labels.T
         if return_all:
-            return labels[np.argsort(logits, axis=1)][:, max(max_gene, logits.shape[1])]
+            return labels[np.argsort(logits, axis=1)][:, min(max_gene, logits.shape[1])]
         return labels[np.argmax(logits, axis=1)]
