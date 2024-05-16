@@ -17,7 +17,7 @@ class TextEncoder(nn.Module):
         if 'biolinkbert' in config['text_model'].lower():
             self.model = AutoModel.from_pretrained(
                 'michiyasunaga/'+config['text_model'])
-            llm_emb_dim = 768
+            llm_emb_dim = 768 if 'base' in config['text_model'] else 1024
         elif config['text_model'] == 'text-embedding-3-small':
             self.model = None
             llm_emb_dim = 1536
@@ -139,6 +139,9 @@ class TextGeneContrastive(LightningModule):
         self.text_encoder = TextEncoder(config)
         self.gene_encoder = GeneEncoder(config)
         self.temperature = config['temperature']
+        if config['new_clip']:
+            self.temperature = nn.Parameter(torch.tensor(
+                self.temperature), requires_grad=True)
         self.lr = config['lr']
         self.mode = config['loss_type']
         self.encoded_input = config['use_bert_encoded']
@@ -232,7 +235,10 @@ class TextGeneContrastive(LightningModule):
             input_ids = inputs['input_ids'].flatten(start_dim=0, end_dim=1)
             text_embedding = text_embedding[input_ids != 0, :]
             gene_embedding = gene_embedding[input_ids != 0, :]
-            l = clip(gene_embedding, text_embedding, self.temperature)
+            if self.config['new_clip']:
+                l = new_clip(gene_embedding, text_embedding, self.temperature)
+            else:
+                l = clip(gene_embedding, text_embedding, self.temperature)
             gene_loss = l['gene_loss']
             text_loss = l['text_loss']
             loss = l['loss']
@@ -264,7 +270,8 @@ class TextGeneContrastive(LightningModule):
             'loss': loss_dict['loss'],
             'train_loss': loss_dict['loss'],
             'train_gene_loss': loss_dict['gene_loss'],
-            'train_text_loss': loss_dict['text_loss']
+            'train_text_loss': loss_dict['text_loss'],
+            'temperature': self.temperature
         }
         self.log_dict(logs)
         return loss_dict
@@ -284,13 +291,9 @@ class TextGeneContrastive(LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         if self.config['lr_schedule']:
             def lr_lambda(epoch: int):
-                if epoch < 5:
+                if epoch < 20:
                     return 1
-                elif epoch < 10:
-                    return 0.5
-                elif epoch < 20:
-                    return 0.1
-                return 0.01
+                return 0.1
             scheduler = torch.optim.lr_scheduler.LambdaLR(
                 optimizer, lr_lambda=lr_lambda, last_epoch=-1)
         return {'optimizer': optimizer, 'lr_scheduler': scheduler}

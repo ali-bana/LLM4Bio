@@ -35,7 +35,7 @@ class LLM4Bio_data(LightningDataModule):
         self.freeze_text_model = config['freeze_text_model']
         if 'biolinkbert' in config['text_model'].lower():
             self.text_tokenizer = AutoTokenizer.from_pretrained(
-                'michiyasunaga/'+config['text_model'])
+                'michiyasunaga/'+config['text_model'], max_length=512, padding="max_length", truncation=True)
         else:
             self.text_tokenizer = None
         token_dictionary_path = './LLM4Bio/Geneformer/token_dictionary.pkl'
@@ -60,6 +60,9 @@ class LLM4Bio_data(LightningDataModule):
             ontology_url = 'https://drive.google.com/uc?export=download&id=1K68vSGFxZ_lf5j9CV75l-sj_TW8R5352'
             cell_ontology_path = os.path.join(
                 self.data_dir, 'cell_type_ontology.txt')
+        elif self.cell_ontology == 'ChatGPT':
+            cell_ontology_path = os.path.join(
+                self.data_dir, 'chatgpt_cell_type_summary.json')
         hgnc2ensmbl_url = 'https://drive.google.com/uc?export=download&id=1s9K_tV2f_n6zONtUt6_lTQY_9FYhvZfm'
         hgnc2ensmbl_path = os.path.join(
             self.data_dir, 'hgnc2ensembl.txt')
@@ -79,17 +82,18 @@ class LLM4Bio_data(LightningDataModule):
             self.gene_summary = json.load(f)
         with open(cell_ontology_path, 'r') as f:
             self.ontology = json.load(f)
+            if self.cell_ontology == 'ChatGPT':
+                self.ontology = self.ontology['gpt-4']
         # clean gene_summary
         for gene in self.gene_summary.keys():
             self.gene_summary[gene] = remove_provided_by(
                 self.gene_summary[gene])
-        adata = sc.read_h5ad(adata_path)
-        kang = sc.read_h5ad(kang_path)
+        adata = sc.read_h5ad(adata_path)[:20000, :]
+        kang = sc.read_h5ad(kang_path)[:100, :]
         kang.obs['study'] = 'Kang'
         test_adata = ad.concat(
             [kang, adata[adata.obs['study'] == 'Oetjen', :].copy()], join='inner')
         adata = adata[adata.obs['study'] != 'Oetjen', :].copy()
-        del kang
         loom_path_train = os.path.join(self.data_dir, 'loom', 'train')
         loom_path_test = os.path.join(self.data_dir, 'loom', 'test')
         if not os.path.exists(loom_path_test):
@@ -116,6 +120,9 @@ class LLM4Bio_data(LightningDataModule):
             self.gene2ensembl, index=test_adata.var_names).values
         self.cell2index = {item: i for i, item in enumerate(
             set(adata.obs['cell_type'].to_list()+test_adata.obs['cell_type'].to_list()))}
+        self.study2index = ['10X', 'Freytag', 'Oetjen', 'Sun', 'Kang']
+        self.study2index = {s: i for i, s in enumerate(self.study2index)}
+        self.index2study = {v: k for k, v in self.study2index.items()}
         train_adata = adata
 
         print('train adata:\n', train_adata)
@@ -123,6 +130,8 @@ class LLM4Bio_data(LightningDataModule):
 
         train_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         test_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
+        train_adata.obs['study'].replace(self.study2index, inplace=True)
+        test_adata.obs['study'].replace(self.study2index, inplace=True)
         self.index2cell = {v: k for k, v in self.cell2index.items()}
 
         test_adata.write_loom(os.path.join(
@@ -130,7 +139,7 @@ class LLM4Bio_data(LightningDataModule):
         train_adata.write_loom(os.path.join(
             loom_path_train, 'pbmc_train.loom'), True)
         tk = TranscriptomeTokenizer(
-            {"cell_type": "cell_type"}, nproc=16)
+            {"cell_type": "cell_type", "study": "study"}, nproc=16)
         self.tokenized_path_train = os.path.join(
             self.data_dir, 'tokenized', 'train')
         self.tokenized_path_test = os.path.join(
@@ -187,17 +196,17 @@ class LLM4Bio_data(LightningDataModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.batch_size,
                           shuffle=True,
-                          collate_fn=self.collator)
+                          collate_fn=self.collator, num_workers=4)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.collator)
+                          collate_fn=self.collator, num_workers=4)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           batch_size=self.batch_size,
-                          collate_fn=self.collator)
+                          collate_fn=self.collator, num_workers=4)
 
     def get_summaries(self, mode, tokenized=True, use_names=False, concat_option=0):
         if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
@@ -286,72 +295,17 @@ class LLM4Bio_data(LightningDataModule):
             return result
 
     def _get_summaries_for_collator(self, mode, encode_using_bert, concat_option=0):
-        if 'biolinkbert' in self.config['text_model'].lower():
-            print('preparing summaries for collator')
-            if not mode in ['gene_celltype', 'concat_celltype', 'concat', 'gene']:
-                raise ValueError(f'mode {mode} is not defined!')
-            if not 'bert' in self.config['text_model'].lower() and encode_using_bert:
-                raise Exception('The text model should be a bert model')
 
-            if encode_using_bert:
-                # we want both celltype and gene summary tables
-                summaries = self.get_summaries(
-                    'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=True, use_names=False, concat_option=concat_option)
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                model = AutoModel.from_pretrained(
-                    'michiyasunaga/'+self.config['text_model']).to(device)
-            else:
-                summaries = self.get_summaries(
-                    'gene_celltype' if 'gene' in mode else 'concat_celltype', tokenized=False, use_names=False, concat_option=concat_option)
-
-            gene_summary, cell_summary = summaries['gene'], summaries['cell']
-            cell_result, gene_result = {}, {}
-            if not encode_using_bert:
-                cell_result = cell_summary
-                if 'concat' in mode:
-                    gene_summary, cells = gene_summary
-                    for gene in gene_summary.keys():
-                        gene_result[gene] = {}
-                        for cell, summary in zip(cells, gene_summary[gene]):
-                            gene_result[gene][cell] = summary
-                    gene_result[0] = {cell: '' for cell in cells}
-                else:
-                    gene_result = gene_summary
-                    gene_result[0] = ''
-            else:
-                with torch.no_grad():
-                    for key in cell_summary.keys():
-                        cell_result[key] = model.forward(
-                            **cell_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
-                if 'gene' in mode:
-                    with torch.no_grad():
-                        for key in tqdm(gene_summary.keys()):
-                            gene_result[key] = model.forward(
-                                **gene_summary[key].to(device)).last_hidden_state[0][0].detach().cpu().numpy()
-                    gene_result[0] = np.zeros(768)
-                elif 'concat' in mode:
-                    gene_summary, cells = gene_summary
-                    for gene in tqdm(gene_summary.keys()):
-                        with torch.no_grad():
-                            gene_result[gene] = {}
-                            out = model.forward(
-                                **gene_summary[gene].to(device)).last_hidden_state.detach().cpu().numpy()
-                            for i, cell in enumerate(cells):
-                                gene_result[gene][cell] = out[i][0]
-                    gene_result[0] = {cell: np.zeros(768) for cell in cells}
-
-            del gene_summary, cell_summary
-            return gene_result, cell_result
-        elif self.config['text_model'] == 'text-embedding-3-small':
+        if self.config['text_model'] == 'text-embedding-3-small' or self.config['text_model'] == 'BioLinkBERT-large':
+            embed_size = 1024 if self.config['text_model'] == 'BioLinkBERT-large' else 1536
             container = EmbeddingContainer(
-                os.path.join(self.config['text_embedding_dir'], 'embeddings.h5'), 1536)
+                os.path.join(self.config['text_embedding_dir'], 'embeddings.h5'), embed_size)
             container.open()
             gene_summary = container.get_all_embeddings(
                 type='concat' if 'concat' in mode else 'gene')
             cell_summary = container.get_all_embeddings(
                 type='cell')
-            cell_summary = {self.cell2index[k]
-                : v for k, v in cell_summary.items()}
+            cell_summary = {self.cell2index[k]: v for k, v in cell_summary.items()}
             gene_summary = {k: v for k, v in gene_summary.items(
             ) if k in self.token_dictionary.keys()}
             if 'concat' in mode:
@@ -360,11 +314,14 @@ class LLM4Bio_data(LightningDataModule):
                 for gene in gene_summary.keys():
                     gene_summary[gene] = {
                         self.cell2index[k]: v for k, v in gene_summary[gene].items()}
-                gene_summary[0] = {k: np.zeros(1536)
+                gene_summary[0] = {k: np.zeros(embed_size)
                                    for k in self.cell2index.values()}
             elif 'gene' in mode:
                 gene_summary = {
                     self.token_dictionary[k]: v for k, v in gene_summary.items()}
-                gene_summary[0] = np.zeros(1536)
+                gene_summary[0] = np.zeros(embed_size)
             container.close()
             return gene_summary, cell_summary
+        else:
+            raise ValueError(
+                f"Text model {self.config['text_model']} is not supported!")

@@ -36,7 +36,7 @@ config = {
     'use_cell_type': False,
     # 'concat_celltype', 'gene_celltype', 'concat', 'gene'
     'loss_type': 'concat',
-    'flatten': True,  # flattens cells and then compute clip
+    'flatten': False,  # flattens cells and then compute clip
     'lr': 1e-2,
     'lr_schedule': True,
     'concat_option': 2,
@@ -45,21 +45,24 @@ config = {
     'use_bn': False,
     'use_dr': True,
     'dr_rate': 0.2,
+    'new_clip': True,
     'leave_out_celltypes': hold_out_celltypes,
     'leave_out_genes': hold_out_genes,
     'keep_genes': keep_genes,
-    'text_embedding_dir': './data/openai_te3_embedding_all',
+    # 'text_embedding_dir': './data/openai_te3_embedding_all',
+    'text_embedding_dir': './data/biolinkbert_large_embedding_all',
     'text_agumentations': [],
     'temperature': 0.01,
     'dino_nlayers': 3,
     'data_dir': data_dir,
     'save_dir': save_dir,
     # BioLinkBERT-base, BioLinkBERT-large, text-embedding-3-small
-    'text_model': 'text-embedding-3-small',
+    # 'text_model': 'text-embedding-3-small',
+    'text_model': 'BioLinkBERT-large',
     'gene_model': 'geneformer',
     'gene_dataset': 'PBMC',
     'gene_summary': 'NCBI',
-    'cell_ontology': 'mixed',
+    'cell_ontology': 'ChatGPT',
 }
 config['use_bert_encoded'] = True if len(
     config['text_agumentations']) == 0 and config['freeze_text_model'] else False
@@ -71,25 +74,16 @@ dataset = LLM4Bio_data(config)
 dataset.prepare_data()
 dataset.setup('')
 
-for b in dataset.train_dataloader():
-    print(b['gene']['study'])
-    break
 
-for b in dataset.test_dataloader():
-    print(b['gene']['study'])
-    break
+# for b in dataset.train_dataloader():
+#     print(b)
+#     break
 
-for b in dataset.val_dataloader():
-    print(b['gene']['study'])
-    break
-
-
-# model = TextGeneContrastive(config)
-
-
-# trainer = Trainer(max_epochs=1)
-# trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
-#             val_dataloaders=dataset.val_dataloader())
+model = TextGeneContrastive(config)
+logger = TensorBoardLogger(save_dir='./temp', name='temp')
+trainer = Trainer(max_epochs=1)
+trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
+            val_dataloaders=dataset.val_dataloader())
 
 # encoded_summaries = model.encode_summaries(
 #     dataset.get_summaries('concat_celltype', use_names=True), dict_key='gene', only_head=True)
