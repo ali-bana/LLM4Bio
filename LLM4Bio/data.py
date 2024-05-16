@@ -88,8 +88,8 @@ class LLM4Bio_data(LightningDataModule):
         for gene in self.gene_summary.keys():
             self.gene_summary[gene] = remove_provided_by(
                 self.gene_summary[gene])
-        adata = sc.read_h5ad(adata_path)[:20000, :]
-        kang = sc.read_h5ad(kang_path)[:100, :]
+        adata = sc.read_h5ad(adata_path)
+        kang = sc.read_h5ad(kang_path)
         kang.obs['study'] = 'Kang'
         test_adata = ad.concat(
             [kang, adata[adata.obs['study'] == 'Oetjen', :].copy()], join='inner')
