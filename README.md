@@ -1,50 +1,25 @@
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
  ![python](https://img.shields.io/badge/Python-3.10-brightgreen)
 
-<p align="center">
-<img src=assets/  alt="Mo's Lab logo"/>
-</p>
+
 
 # LLM4Bio
 
-## 0. Introduction & Scope
+Representation learning for natural language and single-cell data using CLIP loss.
 
-Introducing **lotfollibrary** 
+In order to train or test the model, use two notebooks included in this repo in colab. Then, compress the codes to llm.zip and upload it into colab environment. Notebooks will need access to your google drive in order to save and load the trained model and load the data. You should have a folder by the name of "LLM4Bio" in your google drive containing the same files as in the following link.
 
-[comment]: <> (&#40;**B**ERD's **E**ducational **A**rchive for **R**esearch on)
-
-[comment]: <> (o**M**achine Learning&#41;:)
-
-This is a temporary repo for LLM and GPs project.
+https://drive.google.com/drive/folders/1wfWuZk5tdPwYI2pgf88dkZ9BUwkplDHA?usp=sharing
 
 
-### Projects
+Trained models can be found in the following links.
 
-Currently available:
+Model 1 on GPT Embedding: 
+https://drive.google.com/file/d/10DyKh1uCE4qX4bcWK4Qg1vn80wP6hijG/view?usp=sharing
 
-- [Modules](lotfollibrary/Modules/)
-- 
+Model 2 on GPT Embedding:
+https://drive.google.com/file/d/13QOLmYZpM3o1urwx1Z6AuB5JNGyQOx_v/view?usp=sharing
 
-### Discussion Board
+For more information or issues, you can use github or my email to correspond.
 
-This repository is accompanied by a discussion board intended for active communication with and among the community.
-Please feel free to ask your questions there, share valuable insights and give us feedback on our material.
-
-### Disclaimer
-
-Please note that the contents of this repository are still in the experimental early
-stages and may be subject to significant changes, bugs, and limitations.
-We are continuously working on improving the **lotfollibrary** repository and welcome any
-feedback or contributions. Thank you for your understanding.
-
-## 1. Usage
-
-Install the requirements.txt file using pip:
-
-```shell
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-To be continued...
+alibanaei@live.com

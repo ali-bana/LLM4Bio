@@ -75,15 +75,15 @@ dataset.prepare_data()
 dataset.setup('')
 
 
-# for b in dataset.train_dataloader():
-#     print(b)
-#     break
+for b in dataset.stim_dataloader():
+    print(b)
+    break
 
-model = TextGeneContrastive(config)
-logger = TensorBoardLogger(save_dir='./temp', name='temp')
-trainer = Trainer(max_epochs=1)
-trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
-            val_dataloaders=dataset.val_dataloader())
+# model = TextGeneContrastive(config)
+# logger = TensorBoardLogger(save_dir='./temp', name='temp')
+# trainer = Trainer(max_epochs=1)
+# trainer.fit(model, train_dataloaders=dataset.train_dataloader(),
+#             val_dataloaders=dataset.val_dataloader())
 
 # encoded_summaries = model.encode_summaries(
 #     dataset.get_summaries('concat_celltype', use_names=True), dict_key='gene', only_head=True)

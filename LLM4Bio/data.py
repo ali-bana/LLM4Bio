@@ -91,15 +91,20 @@ class LLM4Bio_data(LightningDataModule):
         adata = sc.read_h5ad(adata_path)
         kang = sc.read_h5ad(kang_path)
         kang.obs['study'] = 'Kang'
+        kang_stim = kang[kang.obs['stim'] == 'STIM']
+        kang = kang[kang.obs['stim'] == 'CTRL']
         test_adata = ad.concat(
             [kang, adata[adata.obs['study'] == 'Oetjen', :].copy()], join='inner')
         adata = adata[adata.obs['study'] != 'Oetjen', :].copy()
         loom_path_train = os.path.join(self.data_dir, 'loom', 'train')
         loom_path_test = os.path.join(self.data_dir, 'loom', 'test')
+        loom_path_stim = os.path.join(self.data_dir, 'loom', 'stim')
         if not os.path.exists(loom_path_test):
             os.makedirs(loom_path_test)
         if not os.path.exists(loom_path_train):
             os.makedirs(loom_path_train)
+        if not os.path.exists(loom_path_stim):
+            os.makedirs(loom_path_stim)
         sc.pp.highly_variable_genes(adata, n_top_genes=self.n_top_genes)
         adata.var.highly_variable = adata.var.highly_variable | adata.var.index.isin(
             self.config['keep_genes'])
@@ -112,14 +117,18 @@ class LLM4Bio_data(LightningDataModule):
                     present_genes.append(i)
         adata._inplace_subset_var(present_genes)
         test_adata._inplace_subset_var(present_genes)
+        kang_stim._inplace_subset_var(present_genes)
         adata.obsm['n_counts'] = adata.X.sum(axis=1)
         test_adata.obsm['n_counts'] = test_adata.X.sum(axis=1)
+        kang_stim.obsm['n_counts'] = kang_stim.X.sum(axis=1)
         adata.varm['ensembl_id'] = pd.Series(
             self.gene2ensembl, index=adata.var_names).values
         test_adata.varm['ensembl_id'] = pd.Series(
             self.gene2ensembl, index=test_adata.var_names).values
+        kang_stim.varm['ensembl_id'] = pd.Series(
+            self.gene2ensembl, index=kang_stim.var_names).values
         self.cell2index = {item: i for i, item in enumerate(
-            set(adata.obs['cell_type'].to_list()+test_adata.obs['cell_type'].to_list()))}
+            set(adata.obs['cell_type'].to_list()+test_adata.obs['cell_type'].to_list()+kang_stim.obs['cell_type'].to_list()))}
         self.study2index = ['10X', 'Freytag', 'Oetjen', 'Sun', 'Kang']
         self.study2index = {s: i for i, s in enumerate(self.study2index)}
         self.index2study = {v: k for k, v in self.study2index.items()}
@@ -127,23 +136,30 @@ class LLM4Bio_data(LightningDataModule):
 
         print('train adata:\n', train_adata)
         print('test_adata:\n', test_adata)
+        print('kang_stim:\n', kang_stim)
 
         train_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         test_adata.obs['cell_type'].replace(self.cell2index, inplace=True)
         train_adata.obs['study'].replace(self.study2index, inplace=True)
         test_adata.obs['study'].replace(self.study2index, inplace=True)
+        kang_stim.obs['cell_type'].replace(self.cell2index, inplace=True)
+        kang_stim.obs['study'].replace(self.study2index, inplace=True)
         self.index2cell = {v: k for k, v in self.cell2index.items()}
 
         test_adata.write_loom(os.path.join(
             loom_path_test, 'pbmc_test.loom'), True)
         train_adata.write_loom(os.path.join(
             loom_path_train, 'pbmc_train.loom'), True)
+        kang_stim.write_loom(os.path.join(
+            loom_path_stim, 'pbmc_stim.loom'), True)
         tk = TranscriptomeTokenizer(
             {"cell_type": "cell_type", "study": "study"}, nproc=16)
         self.tokenized_path_train = os.path.join(
             self.data_dir, 'tokenized', 'train')
         self.tokenized_path_test = os.path.join(
             self.data_dir, 'tokenized', 'test')
+        self.tokenized_path_stim = os.path.join(
+            self.data_dir, 'tokenized', 'stim')
         tk.tokenize_data(loom_path_train,
                          self.tokenized_path_train,
                          "",
@@ -152,8 +168,13 @@ class LLM4Bio_data(LightningDataModule):
                          self.tokenized_path_test,
                          "",
                          file_format="loom")
+        tk.tokenize_data(loom_path_stim,
+                         self.tokenized_path_stim,
+                         "",
+                         file_format="loom")
         self.tokenized_path_train += '.dataset'
         self.tokenized_path_test += '.dataset'
+        self.tokenized_path_stim += '.dataset'
         self.available_genes_train = train_adata.var_names.values
         self.available_genes_train = [self.gene2ensembl[g]
                                       for g in self.available_genes_train]
@@ -173,6 +194,7 @@ class LLM4Bio_data(LightningDataModule):
         self.val_dataset = train_dataset['test']
         self.train_dataset = train_dataset['train']
         self.test_dataset = load_from_disk(self.tokenized_path_test)
+        self.stim_dataset = load_from_disk(self.tokenized_path_stim)
         with open("LLM4Bio/Geneformer/token_dictionary.pkl", "rb") as fp:
             self.token_dictionary = pickle.load(fp)
         precollator = GeneformerPreCollator(
@@ -205,6 +227,11 @@ class LLM4Bio_data(LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
+                          batch_size=self.batch_size,
+                          collate_fn=self.collator, num_workers=4)
+
+    def stim_dataloader(self):
+        return DataLoader(self.stim_dataset,
                           batch_size=self.batch_size,
                           collate_fn=self.collator, num_workers=4)
 

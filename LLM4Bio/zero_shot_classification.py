@@ -77,9 +77,7 @@ from transformers import AutoTokenizer
 
 # concat, gene_embedding %90
 # cell_type text, cell_embedding = mean(gene_embedding) => %79
-
-
-def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gene=200):
+def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gene=200, return_scores=False):
     if not mode in ['gene', 'cell', 'concat']:
         raise ValueError('mode must be "gene", "cell" or "gene_cell"')
     if mode == 'concat':
@@ -102,7 +100,7 @@ def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gen
         # embedding = [N, ]
         logits = embeddings @ embedded_labels.T
         if return_all:
-            return cell_types_labels[np.argsort(logits, axis=1)], genes_labels[np.argsort(logits, axis=1)][:, min(max_gene, logits.shape[1])]
+            return cell_types_labels[np.argsort(-logits, axis=1)], genes_labels[np.argsort(-logits, axis=1)][:, :min(max_gene, logits.shape[1])]
         return cell_types_labels[np.argmax(logits, axis=1)], genes_labels[np.argmax(logits, axis=1)]
 
     else:
@@ -117,5 +115,8 @@ def classify(embeddings, embedded_labels, mode='gene', return_all=False, max_gen
         labels, embedded_labels = np.array(l), np.stack(el)
         logits = embeddings @ embedded_labels.T
         if return_all:
-            return labels[np.argsort(logits, axis=1)][:, min(max_gene, logits.shape[1])]
+            logits = logits / logits.sum(axis=1)[:, np.newaxis]
+            if return_scores:
+                return labels[np.argsort(-logits, axis=1)][:, :min(max_gene, logits.shape[1])], logits[:, np.argsort(-logits, axis=1)][:, :min(max_gene, logits.shape[1])]
+            return labels[np.argsort(-logits, axis=1)][:, :min(max_gene, logits.shape[1])]
         return labels[np.argmax(logits, axis=1)]

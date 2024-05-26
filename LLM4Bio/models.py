@@ -139,6 +139,8 @@ class TextGeneContrastive(LightningModule):
         self.text_encoder = TextEncoder(config)
         self.gene_encoder = GeneEncoder(config)
         self.temperature = config['temperature']
+        if not 'new_clip' in config.keys():
+            config['new_clip'] = False
         if config['new_clip']:
             self.temperature = nn.Parameter(torch.tensor(
                 self.temperature), requires_grad=True)
